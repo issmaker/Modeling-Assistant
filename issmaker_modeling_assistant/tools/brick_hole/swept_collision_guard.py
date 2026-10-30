@@ -201,6 +201,39 @@ def _on_segment(p,a,b,tol):
     return _norm(_sub(ap,_mul(ab,max(0,min(1,t)))))<=tol*2
 
 
+def _shared_generated_edge_source_contact(strip, obstacle, hits, tol):
+    """Prove an edge-only contact with an existing edge at a welded source corner.
+
+    Both the swept surface and the source triangle must touch along their
+    boundaries. Authorised source BMVert identity is required, not XYZ alone.
+    Never call this for a proven area overlap (rejected by the caller).
+    """
+    if not hits:
+        return False
+    edge = tuple(strip['edge'])
+    source_ids = tuple(obstacle.get('verts', ()))
+    if len(edge) != 2 or len(source_ids) != 3:
+        return False
+    common = [i for i, vert in enumerate(edge) if vert in source_ids]
+    if len(common) != 1:
+        return False
+    i = common[0]
+    quad = tuple(_v(p) for p in strip['quad'])
+    root, tip = quad[i], quad[3-i]
+    if _norm(_sub(root, tip)) <= tol*2:
+        return False
+    if not all(_on_segment(p, root, tip, tol) for p in hits):
+        return False
+    j = source_ids.index(edge[i])
+    tri = tuple(_v(p) for p in obstacle['tri'])
+    if _norm(_sub(root, tri[j])) > tol:
+        return False
+    return any(
+        all(_on_segment(p, tri[j], tri[k], tol) for p in hits)
+        for k in range(3) if k != j
+    )
+
+
 def _bounds(tri):return [(min(p[i] for p in tri),max(p[i] for p in tri)) for i in range(3)]
 def _overlap(a,b,tol):return all(a[i][0]<=b[i][1]+tol and b[i][0]<=a[i][1]+tol for i in range(3))
 
@@ -588,6 +621,15 @@ def validate_swept_edges(strips, obstacles, *, tol=TOLERANCE, max_candidate_pair
                     return True
                 return any(_norm(_sub(p,q)) <= tol*2 for q in vertex_contacts)
             if any(not authorized(p) for p in hits):
+                # A neighbouring source face may meet the NEW swept boundary
+                # along its existing edge, at a welded corner. Point-only tip
+                # contact counts, since both triangulation halves are checked.
+                # True area overlaps and interior contacts still block.
+                if _shared_generated_edge_source_contact(strip, obstacles[j], hits, tol):
+                    if statistics is not None:
+                        statistics['authorized_generated_edge_touches'] = (
+                            statistics.get('authorized_generated_edge_touches', 0) + 1)
+                    continue
                 # W58.31: A *point-only* coincidence of two geometrical
                 # vertices is not penetration even when their topology IDs
                 # differ. This is a warning/unwelded contact, not a hard
