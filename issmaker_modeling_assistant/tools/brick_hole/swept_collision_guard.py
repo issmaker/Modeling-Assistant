@@ -4,7 +4,7 @@ This code intentionally has no Blender imports so a separate oracle can exercise
 A collision is an intersection other than an explicitly permitted, topologically
 shared seam. BH0472 separates proof from uncertainty: coarse tolerances discover
 candidates; only a refined local narrow-phase blocks geometry. Resource exhaustion
-is reported as UNCERTAIN rather than falsely labelled as a collision.
+is recorded as UNCERTAIN, then blocked as RESOURCE_LIMIT (not collision).
 """
 import math
 from bisect import bisect_right
@@ -663,7 +663,13 @@ def validate_swept_edges(strips, obstacles, *, tol=TOLERANCE, max_candidate_pair
                           budget_exhausted=bool(budget_exhausted),
                           validation_state=('UNCERTAIN' if budget_exhausted else 'VALID'),
                           elapsed_ms=round((perf_counter()-started)*1000., 3))
-    # A resource budget is not proof of collision.  The caller may surface the
-    # UNCERTAIN advisory while allowing the protected transaction to continue;
-    # every actually tested collision still blocks immediately above.
+    # Reaching the candidate budget leaves potentially intersecting pairs unchecked.
+    # Do not treat an incomplete proof as a safe extrusion: fail closed before
+    # the caller can mutate BMesh. Keep UNCERTAIN in diagnostics, not COLLISION.
+    if budget_exhausted:
+        raise ValueError(
+            'RESOURCE_LIMIT: проверка пересечений неполная '
+            f'(проверено {checked} пар, лимит {max_candidate_pairs}). '
+            'Уменьшите выделение или разделите операцию.'
+        )
     return checked
