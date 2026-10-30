@@ -1003,22 +1003,9 @@ def safety_preflight(context, depth, face_mode=False,
         # W58.6: fail READ-ONLY before entering the transactional Mesh copy.
         # A mixed-normal selection is unsupported by this FACE-mode contract;
         # previous builds silently distorted the UV density by 40..170 px/m.
-        src_normal_matrix=obj.matrix_world.to_3x3().inverted().transposed()
-        for component_id,group in enumerate(components,1):
-            ref=(src_normal_matrix@group[0].normal).normalized()
-            origin=obj.matrix_world@group[0].verts[0].co
-            for element in group:
-                normal=(src_normal_matrix@element.normal).normalized()
-                if normal.dot(ref)<0.999999:
-                    raise ValueError(
-                        f"BRICK_HOLE_UNSUPPORTED_MULTIPLANE: segment {component_id}; "
-                        "выделение пересекает поворот стены. Нужна одна плоскость.")
-                for vertex in element.verts:
-                    q=obj.matrix_world@vertex.co
-                    if abs((q-origin).dot(ref))>1.e-4:
-                        raise ValueError(
-                            f"BRICK_HOLE_UNSUPPORTED_MULTIPLANE: segment {component_id}; "
-                            "выделенные полигоны не лежат в одной плоскости.")
+        # Connected FACE regions may cross corners or curved wall segments.
+        # Preserve native region extrusion and let the existing shared-edge
+        # winding, contour, transactional and UV audits decide validity.
         for component in components:
             component_boundary = boundary_edges_for_faces(component)
             cycles = split_selected_cycles(component_boundary)
@@ -4396,31 +4383,11 @@ class MESH_OT_brick_hole_extrude_faces(bpy.types.Operator):
             self.report({'ERROR'}, "Выделите полигоны, заполняющие проём")
             return {'CANCELLED'}
 
-        # W58.6: This FACE extrusion contract is planar per component.
-        # Crossing a wall turn in one selection previously returned FINISHED
-        # but contracted cap edges inherited old UV lengths (1176 px/m for
-        # 1000px/m authored UV), sometimes yielding repeated cap vertices.
-        # Unsupported multi-plane selection is NOT bad source geometry.
-        # Refuse before touching any source BMesh or authored UV.
-        normal_matrix=obj.matrix_world.to_3x3().inverted().transposed()
-        for comp_i,component in enumerate(components,1):
-            reference=(normal_matrix@component[0].normal).normalized()
-            origin=obj.matrix_world@component[0].verts[0].co
-            for face in component:
-                world_normal=(normal_matrix@face.normal).normalized()
-                if world_normal.dot(reference)<0.999999:
-                    self.report({'ERROR'}, 
-                        f"BRICK_HOLE_UNSUPPORTED_MULTIPLANE: участок {comp_i}; "
-                        "несколько направлений нормалей. Используйте прямую область "
-                        "или отдельные проёмы на каждом участке стены.")
-                    return {'CANCELLED'}
-                for vertex in face.verts:
-                    point=obj.matrix_world@vertex.co
-                    if abs((point-origin).dot(reference))>1.e-4:
-                        self.report({'ERROR'},
-                            f"BRICK_HOLE_UNSUPPORTED_MULTIPLANE: участок {comp_i}; "
-                            "выделенные полигоны не лежат в одной плоскости.")
-                        return {'CANCELLED'}
+        # For bent FILLED regions validate consistent shared-edge winding
+        # before the native transaction. Never assume all normals are equal.
+        # The post-build UV density and geometry checks remain mandatory.
+        for component in components:
+            selected_region_world_normal(obj, component, require_consistent_sign=True)
 
         uv_name = scene.brick_hole_uv_map
         if uv_name:
