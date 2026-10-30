@@ -3031,6 +3031,7 @@ class MESH_OT_brick_hole_extrude(bpy.types.Operator):
             else [edge for edge in bm.edges if edge.select and not edge.hide]
         )
         next_region_id = max((f[result_layer] for f in bm.faces), default=0) + 1
+        first_new_region_id = next_region_id
         if self.face_region:
             from .native_direction_contract import plan_native_faces
             face_plan = plan_native_faces(
@@ -3514,6 +3515,16 @@ class MESH_OT_brick_hole_extrude(bpy.types.Operator):
                 f"Проверка результата: UV-нарушений {violations}, "
                 f"откосов {assigned_faces}, частей {packed_faces}"
             )
+        if self.face_region and getattr(context.scene, 'brick_hole_check_intersections', True):
+            from .filled_intersection_guard import validate_filled_result_intersections
+            intersection_stats = {}
+            try:
+                validate_filled_result_intersections(
+                    bm, result_layer, first_new_region_id, cap_faces=cap_faces,
+                    statistics=intersection_stats,
+                )
+            finally:
+                write_log('FILLED_INTERSECTION_GUARD: ' + repr(intersection_stats))
         _build_stage('UV_DENSITY_VALIDATION', f'faces={len(processed)}; target=1000px/m')
         invalid = reveal_degenerate_details(processed)
         if invalid:
