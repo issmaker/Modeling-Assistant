@@ -3041,6 +3041,11 @@ class MESH_OT_brick_hole_extrude(bpy.types.Operator):
                 (tuple(face_world_normal(obj, face)) for face in selected_faces),
             )
             source_face_count = len(selected_faces)
+            source_face_set = set(selected_faces)
+            source_region_edges = {edge for face in selected_faces for edge in face.edges}
+            expected_internal_cap_edges = sum(
+                sum(linked in source_face_set for linked in edge.link_faces) == 2
+                for edge in source_region_edges)
             bmesh.update_edit_mesh(obj.data, loop_triangles=False, destructive=False)
             region_kwargs = {
                 "use_normal_flip": False,
@@ -3515,6 +3520,19 @@ class MESH_OT_brick_hole_extrude(bpy.types.Operator):
                 f"Проверка результата: UV-нарушений {violations}, "
                 f"откосов {assigned_faces}, частей {packed_faces}"
             )
+        if self.face_region:
+            from .filled_topology_guard import validate_filled_result_topology
+            topology_stats = {}
+            try:
+                validate_filled_result_topology(
+                    bm, result_layer, first_new_region_id,
+                    cap_faces=cap_faces, expected_caps=source_face_count,
+                    expected_boundary_edges=len(selected_edges),
+                    expected_internal_edges=expected_internal_cap_edges,
+                    statistics=topology_stats,
+                )
+            finally:
+                write_log('FILLED_TOPOLOGY_GUARD: ' + repr(topology_stats))
         if self.face_region and getattr(context.scene, 'brick_hole_check_intersections', True):
             from .filled_intersection_guard import validate_filled_result_intersections
             intersection_stats = {}
