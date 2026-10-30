@@ -1,0 +1,14 @@
+schema_version = "1.0.0"
+id = "issmaker_modeling_assistant"
+version = "2.0.0"
+name = "ISSMAKER Unified Modeling Suite"
+tagline = "Windows, openings, collisions, walls and viewport tools"
+maintainer = "issmaker"
+type = "add-on"
+blender_version_min = "4.5.0"
+license = ["SPDX:GPL-3.0-or-later"]
+platforms = ["windows-x64"]
+
+[permissions]
+files = "Save ISSMAKER appearance preferences in Blender user config, plus diagnostic ZIP snapshots on request"
+clipboard = "Copy diagnostic text reports or a ZIP path at user request"

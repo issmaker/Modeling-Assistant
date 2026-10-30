@@ -1,0 +1,164 @@
+[
+  {
+    "id": "H01",
+    "name": "Глобальное радиальное меню VIEW / TOOLS / QUICK",
+    "source": "ui.py",
+    "acceptance": "Область сектора, Hover, Esc, Quick Select"
+  },
+  {
+    "id": "H02",
+    "name": "Чипы Appearance / Geometry внутри радиального меню",
+    "source": "appearance_studio.py",
+    "acceptance": "Подсказки, текст, совпадение прямоугольника с hit"
+  },
+  {
+    "id": "H03",
+    "name": "Основной навигационный HUD Viewport",
+    "source": "ui.py",
+    "acceptance": "Позиция, иконки, клики"
+  },
+  {
+    "id": "H04",
+    "name": "Основная панель инструментов / нижний HUD Viewport",
+    "source": "ui.py",
+    "acceptance": "Состояния кнопок, размеры, Esc"
+  },
+  {
+    "id": "H05",
+    "name": "Быстрая панель в UV Editor",
+    "source": "ui.py",
+    "acceptance": "Масштаб и ширина редактора"
+  },
+  {
+    "id": "H06",
+    "name": "Шейдерная панель инструментов",
+    "source": "ui.py",
+    "acceptance": "Проверить запуск модального выбора"
+  },
+  {
+    "id": "H07",
+    "name": "Выбор Shader Editor EMPTY/UDIM — радиальное меню",
+    "source": "shader_tools.py",
+    "acceptance": "Цветовая тема; хит сектора, Esc; визуально в Blender"
+  },
+  {
+    "id": "H08",
+    "name": "Appearance Studio — основное плавающее окно",
+    "source": "appearance_studio.py",
+    "acceptance": "Переключение вкладок, цвета, swatches"
+  },
+  {
+    "id": "H09",
+    "name": "Quality Popup / Geometry popup",
+    "source": "styled_panels.py",
+    "acceptance": "Контраст, маленький Viewport, клики"
+  },
+  {
+    "id": "H10",
+    "name": "UV Wall главный Viewport Inspector / Studio Dock",
+    "source": "tools/uv_wall/UV_Wall_Professional/viewport/controller.py",
+    "acceptance": "WALL/SURFACE/CORNICE, ошибки, высоты, Esc"
+  },
+  {
+    "id": "H11",
+    "name": "UV Wall параметрические окна и поля",
+    "source": "tools/uv_wall/UV_Wall_Professional/viewport/parameter_windows.py",
+    "acceptance": "Числовой ввод, +/- , drag, focus"
+  },
+  {
+    "id": "H12",
+    "name": "UV Wall подсказки, маркеры и списки",
+    "source": "tools/uv_wall/UV_Wall_Professional/viewport/controller.py",
+    "acceptance": "Z-маркеры, стрелки, захват, popup"
+  },
+  {
+    "id": "H13",
+    "name": "DWOS Window Composer",
+    "source": "tools/dwos_windows/native/composer.py",
+    "acceptance": "PAN/CORNER/CURVED, ONE/SEL/SAME/ALL/COPY"
+  },
+  {
+    "id": "H14",
+    "name": "DWOS Canvas: сплиты, scissors и профильные маркеры",
+    "source": "tools/dwos_windows/native/composer.py",
+    "acceptance": "Клик маркеров, ввода, захват окна"
+  },
+  {
+    "id": "H15",
+    "name": "DWOS 3D/View overlays",
+    "source": "tools/dwos_windows/native/viewport.py",
+    "acceptance": "Сохранить значение цвета диагностических граней"
+  },
+  {
+    "id": "H16",
+    "name": "Brick Hole Interactive HUD",
+    "source": "tools/brick_hole/__init__.py",
+    "acceptance": "Глубина, нормаль, field focus, Esc"
+  },
+  {
+    "id": "H17",
+    "name": "Brick Hole Collapsed Bar / picker",
+    "source": "tools/brick_hole/__init__.py",
+    "acceptance": "Одна видимая кнопка = одна hitbox"
+  },
+  {
+    "id": "H18",
+    "name": "Brick Hole Issue Inspector",
+    "source": "tools/brick_hole/issue_inspector.py",
+    "acceptance": "Карточка ошибки; закрытие Esc"
+  },
+  {
+    "id": "H19",
+    "name": "Brick Hole Preview + diagnostic overlays",
+    "source": "tools/brick_hole/__init__.py",
+    "acceptance": "Номера и подписи ошибок, не менять диагностические цвета"
+  },
+  {
+    "id": "H20",
+    "name": "Brick Hole Fixture HUD (тесты)",
+    "source": "tools/brick_hole/__init__.py",
+    "acceptance": "Тестовые кейсы, hitbox, Esc"
+  },
+  {
+    "id": "H21",
+    "name": "Collision Inspector toolbar/footer и меню",
+    "source": "tools/collision_inspector/viewport_ui.py",
+    "acceptance": "Список ошибок, навигация, hit_toolbar/hit_footer"
+  },
+  {
+    "id": "H22",
+    "name": "Collision Inspector 3D markers",
+    "source": "tools/collision_inspector/viewport_ui.py",
+    "acceptance": "Не менять сигнальные цвета"
+  },
+  {
+    "id": "H23",
+    "name": "UV module boundary visualizer",
+    "source": "module_visualization.py",
+    "acceptance": "Линии модулей и seam, не перекрашивать без UX"
+  },
+  {
+    "id": "H24",
+    "name": "UV Editor issue overlay + caption",
+    "source": "uv_feedback.py",
+    "acceptance": "FLIP/STRETCH подписи на разных темах"
+  },
+  {
+    "id": "H25",
+    "name": "3D UV issue overlay + caption",
+    "source": "viewport_feedback.py",
+    "acceptance": "Надписи возле UV-ошибок в 3D"
+  },
+  {
+    "id": "H26",
+    "name": "Weld Preview markers / index labels",
+    "source": "weld_preview.py",
+    "acceptance": "Badge theme, числа, не менять цвета пар"
+  },
+  {
+    "id": "H27",
+    "name": "Общие уведомления ISSMAKER/состояние",
+    "source": "ui.py",
+    "acceptance": "Обрезка длинных сообщений, красный статус"
+  }
+]

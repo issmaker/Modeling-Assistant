@@ -1,0 +1,27 @@
+{
+  "size": 128,
+  "icons": [
+    "MOD_PHYSICS",
+    "SHADING_SOLID",
+    "AUTOMERGE_ON",
+    "NORMALS_FACE",
+    "MOD_WIREFRAME",
+    "MOD_SMOOTH",
+    "UV_SYNC_SELECT",
+    "LINKED",
+    "UV_DATA",
+    "NODE_MATERIAL",
+    "PIVOT_BOUNDBOX",
+    "MOD_UVPROJECT",
+    "VIEWZOOM",
+    "TRASH",
+    "X",
+    "BACK",
+    "NEXT",
+    "CHECK",
+    "RADIAL",
+    "ISS_TOOLS",
+    "ISS_SPLIT"
+  ],
+  "format": "A8_LUMA_ZLIB"
+}

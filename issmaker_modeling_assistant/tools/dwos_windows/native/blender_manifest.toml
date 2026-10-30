@@ -1,0 +1,9 @@
+schema_version = "1.0.0"
+id = "dwos_window_core"
+version = "3.7.37"
+name = "DWOS Window Core"
+tagline = "DWOS Studio: RC38 live width-aware V Interior geometry"
+maintainer = "issmaker"
+type = "add-on"
+blender_version_min = "4.5.0"
+license = ["SPDX:MIT"]
