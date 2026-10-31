@@ -4496,6 +4496,14 @@ class MESH_OT_brick_hole_extrude_faces(bpy.types.Operator):
                                 scene,'brick_hole_corner_uv_allow_deviation',False),
                             material_override=material_index)
                         write_log('MICRO_CORNER_BOUNDARY_LOCK: '+repr(micro_corner_report))
+                        seam_error=micro_corner_report.get('short_edge_uv_max_error_px',0.0)
+                        if seam_error>0.25:
+                            self.report({'WARNING'},
+                                f'Micro-Corner: UV двух коротких рёбер расходится '
+                                f'до {seam_error:.2f} px; осмотрите текстуру на углу')
+                            write_log(f'MICRO_CORNER_SHORT_EDGE_UV_ADVISORY: '
+                                      f'max_error={seam_error:.3f}px; '
+                                      'source_uv_preserved=YES; review_required=YES')
                 if micro_corner_report is None:
                     result = bpy.ops.mesh.brick_hole_extrude(
                         depth=signed_depth,

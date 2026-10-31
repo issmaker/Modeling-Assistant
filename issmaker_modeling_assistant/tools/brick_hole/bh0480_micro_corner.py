@@ -232,6 +232,24 @@ def apply_micro_corner_to_edit_mesh(obj,bm,faces,depth,resolution=4096,
                 l.vert is not v or max(abs(l[uv].uv[k]-c[k]) for k in (0,1))>1e-7
                 for l,(v,c) in zip(f.loops,saved)):
             raise ValueError('Micro-Corner: соседняя UV или топология изменена')
+    # The middle 7.6 mm face contributes two tiny perimeter edges.
+    # They are geometrically part of the new n-gon reveal, but an isometric
+    # chart anchored on the longer adjacent face cannot in general reproduce
+    # BOTH authored short-edge UV endpoints. Quantify, never hide, this gap.
+    micro_edge_errors=[]
+    for face,v0,v1 in ((side[1],upper[1],upper[2]),
+                       (side[3],lower[1],lower[2])):
+        host_face=next((h for h in v0.link_faces
+                        if h in v1.link_faces and h in snap),None)
+        if host_face is None:
+            raise ValueError('Micro-Corner: исходный UV короткого ребра потерян')
+        h_uv={l.vert:l[uv].uv.copy() for l in host_face.loops}
+        n_uv={l.vert:l[uv].uv.copy() for l in face.loops}
+        for vertex in (v0,v1):
+            if vertex not in h_uv or vertex not in n_uv:
+                raise ValueError('Micro-Corner: короткое ребро не найдено')
+            micro_edge_errors.append((h_uv[vertex]-n_uv[vertex]).length*resolution)
+    short_edge_error=max(micro_edge_errors,default=0.0)
     bm.faces.index_update()
     if sum(e.is_boundary for e in bm.edges)!=borders_before:
         raise ValueError('Micro-Corner: граница исходной стены изменилась')
@@ -249,4 +267,6 @@ def apply_micro_corner_to_edit_mesh(obj,bm,faces,depth,resolution=4096,
     bmesh.update_edit_mesh(obj.data,loop_triangles=True,destructive=True)
     return {'caps':2,'reveals':len(side),'ppm':tuple(round(v,2) for v in actual_ppm),
             'uv_override':bool(allow_density_override),'topology':top,
-            'collision':collision, 'micro_width':lengths[1]}
+            'collision':collision, 'micro_width':lengths[1],
+            'short_edge_uv_max_error_px':round(short_edge_error,3),
+            'uv_boundary_exact_edges':8 if short_edge_error<0.25 else 6}
