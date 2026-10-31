@@ -1338,6 +1338,16 @@ def protected_operation(method):
             else:
                 preflight_result = safety_preflight(context, depth, face_mode)
             source_uv_advisory = source_uv_warning_message(preflight_result)
+            if (source_uv_advisory and
+                    getattr(context.scene,'brick_hole_corner_uv_allow_deviation',False) and
+                    tuple(context.tool_settings.mesh_select_mode)==(False,False,True)):
+                from .bh0480_micro_corner import classify_three_face_corner
+                preflight_bm=bmesh.from_edit_mesh(obj.data)
+                preflight_faces=[f for f in preflight_bm.faces if f.select and not f.hide]
+                if classify_three_face_corner(preflight_bm,preflight_faces) is not None:
+                    source_uv_advisory=(
+                        'Micro-Corner: по вашему разрешению UV откоса наследует '
+                        'плотность исходной границы; UV стены сохранены')
             original = obj.data
             # This audit only inspects geometry. It does not weld or move a vertex.
             # Blender Mesh vertex arrays in Edit Mode may be stale, therefore
@@ -4472,16 +4482,31 @@ class MESH_OT_brick_hole_extrude_faces(bpy.types.Operator):
                 if getattr(context, 'workspace', None):
                     context.workspace.status_text_set(
                         text=f"Brick Hole: заполненный участок {index}/{len(snapshots)}")
-                result = bpy.ops.mesh.brick_hole_extrude(
-                    depth=signed_depth,
-                    texture_resolution=active_resolution,
-                    reverse_u=scene.brick_hole_reverse_u,
-                    append_log=True,
-                    override_material_index=material_index,
-                    face_region=True,
-                )
-                if 'FINISHED' not in result:
-                    raise RuntimeError(f"Участок {index} не обработан")
+                micro_corner_report=None
+                if (signed_depth<0 and
+                        scene.brick_hole_direction_source=='AUTO'):
+                    from .bh0480_micro_corner import (
+                        classify_three_face_corner, apply_micro_corner_to_edit_mesh)
+                    if classify_three_face_corner(bm,current_faces) is not None:
+                        _build_stage('MICRO_CORNER_BOUNDARY_UV',
+                                     f'faces={len(current_faces)}; depth={signed_depth:.6f}')
+                        micro_corner_report=apply_micro_corner_to_edit_mesh(
+                            obj,bm,current_faces,signed_depth,active_resolution,
+                            allow_density_override=getattr(
+                                scene,'brick_hole_corner_uv_allow_deviation',False),
+                            material_override=material_index)
+                        write_log('MICRO_CORNER_BOUNDARY_LOCK: '+repr(micro_corner_report))
+                if micro_corner_report is None:
+                    result = bpy.ops.mesh.brick_hole_extrude(
+                        depth=signed_depth,
+                        texture_resolution=active_resolution,
+                        reverse_u=scene.brick_hole_reverse_u,
+                        append_log=True,
+                        override_material_index=material_index,
+                        face_region=True,
+                    )
+                    if 'FINISHED' not in result:
+                        raise RuntimeError(f"Участок {index} не обработан")
                 bm = bmesh.from_edit_mesh(obj.data)
                 cap_signatures.update(signature(face) for face in bm.faces if face.select)
 
@@ -7393,6 +7418,12 @@ class VIEW3D_PT_brick_hole_extrude(bpy.types.Panel):
         scan.label(text='Красные / жёлтые · 1 / 2 — фильтры',icon='INFO')
         scan.label(text='← → навигация · F фокус · Esc выход',icon='INFO')
         layout.prop(context.scene,'brick_hole_uv_policy',text='SMART UV')
+        if faces:
+            approval=layout.row()
+            approval.prop(context.scene,'brick_hole_corner_uv_allow_deviation',
+                          text='Разрешаю наследовать UV-плотность угла')
+            if context.scene.brick_hole_corner_uv_allow_deviation:
+                layout.label(text='Micro-Corner: масштаб стены разрешён вместо 1000',icon='INFO')
         if _brick_hole_uv_legacy_conflict(context.scene):
             layout.label(text='Старые Edge/Bridge UV · подтвердите режим',icon='ERROR')
             layout.operator(MESH_OT_brick_hole_confirm_uv_policy.bl_idname,
@@ -8488,6 +8519,13 @@ def _register_properties():
         setattr(bpy.types.Scene,name,EnumProperty(
             name='Текущая ось',items=tuple((k,k,'Активная ось '+k) for k in 'XYZ'),default='Z'))
         _OWNED_SCENE_PROPERTIES.append(name)
+    bpy.types.Scene.brick_hole_corner_uv_allow_deviation = BoolProperty(
+        name='Micro-Corner: разрешить масштаб стены',
+        description=('Явное разрешение наследовать исходную UV-плотность на новых откосах, '
+                     'если она отличается от 1000 px/м; UV исходной стены не изменяются'),
+        default=False)
+    _OWNED_SCENE_PROPERTIES.append('brick_hole_corner_uv_allow_deviation')
+
     bpy.types.Scene.brick_hole_depth = FloatProperty(
         name="Глубина",
         default=0.30,
@@ -8686,7 +8724,7 @@ def register_integrated():
     for cls in registered:
         if getattr(bpy.types, cls.__name__, None) is not None:
             raise RuntimeError('ISSMAKER: обнаружен внешний Brick Hole класс %s. Отключите standalone Brick Hole перед установкой.' % cls.__name__)
-    for name in (('brick_hole_uv_policy', 'brick_hole_edge_uv_mode', 'brick_hole_bridge_uv_mode', 'brick_hole_uv_transition_m', 'brick_hole_direction_source', 'brick_hole_manual_normal', 'brick_hole_face_frame_x', 'brick_hole_face_frame_y', 'brick_hole_face_frame_z', 'brick_hole_face_frame_valid', 'brick_hole_face_axis', 'brick_hole_global_axis', 'brick_hole_depth', 'brick_hole_check_intersections', 'brick_hole_safe_depth_candidate', 'brick_hole_safe_depth_status', 'brick_hole_vertex_snap', 'brick_hole_tile_size', 'brick_hole_reverse_u', 'brick_hole_direction', 'brick_hole_uv_map', 'brick_hole_resolution', 'brick_hole_material_mode', 'brick_hole_material_index', 'brick_hole_allow_repeat', 'brick_hole_fixture_index', 'brick_hole_issue_cursor', 'brick_hole_last_error_summary', 'brick_hole_show_overlay', 'brick_hole_overlay_labels', 'brick_hole_overlay_error', 'brick_hole_overlay_mode', 'brick_hole_hud_placement', 'brick_hole_interactive_state', 'brick_hole_preview_verified', 'brick_hole_preview_face_mode', 'brick_hole_preview_signature', 'brick_hole_preview_loops', 'brick_hole_preview_edges', 'brick_hole_preview_cuts', 'brick_hole_preview_warnings', 'brick_hole_preview_text', 'brick_hole_progress', 'brick_hole_last_contours', 'brick_hole_last_checked', 'brick_hole_last_errors', 'brick_hole_qa_state')):
+    for name in (('brick_hole_uv_policy', 'brick_hole_edge_uv_mode', 'brick_hole_bridge_uv_mode', 'brick_hole_uv_transition_m', 'brick_hole_direction_source', 'brick_hole_manual_normal', 'brick_hole_face_frame_x', 'brick_hole_face_frame_y', 'brick_hole_face_frame_z', 'brick_hole_face_frame_valid', 'brick_hole_face_axis', 'brick_hole_global_axis', 'brick_hole_depth', 'brick_hole_corner_uv_allow_deviation', 'brick_hole_check_intersections', 'brick_hole_safe_depth_candidate', 'brick_hole_safe_depth_status', 'brick_hole_vertex_snap', 'brick_hole_tile_size', 'brick_hole_reverse_u', 'brick_hole_direction', 'brick_hole_uv_map', 'brick_hole_resolution', 'brick_hole_material_mode', 'brick_hole_material_index', 'brick_hole_allow_repeat', 'brick_hole_fixture_index', 'brick_hole_issue_cursor', 'brick_hole_last_error_summary', 'brick_hole_show_overlay', 'brick_hole_overlay_labels', 'brick_hole_overlay_error', 'brick_hole_overlay_mode', 'brick_hole_hud_placement', 'brick_hole_interactive_state', 'brick_hole_preview_verified', 'brick_hole_preview_face_mode', 'brick_hole_preview_signature', 'brick_hole_preview_loops', 'brick_hole_preview_edges', 'brick_hole_preview_cuts', 'brick_hole_preview_warnings', 'brick_hole_preview_text', 'brick_hole_progress', 'brick_hole_last_contours', 'brick_hole_last_checked', 'brick_hole_last_errors', 'brick_hole_qa_state')):
         if hasattr(bpy.types.Scene, name):
             raise RuntimeError('ISSMAKER: свойство Scene.%s занято. Отключите standalone Brick Hole.' % name)
     try:
