@@ -8317,6 +8317,9 @@ class VIEW3D_OT_brick_hole_fixture_hud(bpy.types.Operator):
             return {'CANCELLED'}
 
 
+from . import bh0479_test_ui
+
+
 class VIEW3D_PT_brick_hole_advanced(BRICKHOLE_PT_Base, bpy.types.Panel):
     bl_label = "Защита и диагностика"
     bl_idname = "VIEW3D_PT_brick_hole_advanced"
@@ -8329,6 +8332,16 @@ class VIEW3D_PT_brick_hole_advanced(BRICKHOLE_PT_Base, bpy.types.Panel):
         row.operator(OBJECT_OT_brick_hole_fixture_walls.bl_idname,
                      text='СОЗДАТЬ 30 ТЕСТОВЫХ СТЕН',icon='MESH_GRID')
         layout.label(text='15 открытых + 15 закрытых · один Mesh',icon='INFO')
+        corner_box=layout.box()
+        corner_box.label(text='TEST 1 · Micro-Corner · эксперимент',icon='MOD_BEVEL')
+        btn=corner_box.row()
+        btn.scale_y=1.25
+        btn.enabled=(context.mode in {'OBJECT','EDIT_MESH'} and
+                     (context.edit_object or context.active_object) is not None)
+        btn.operator(bh0479_test_ui.OBJECT_OT_brick_hole_corner_test1_copy.bl_idname,
+                     text='TEST 1 · создать копию проёма',icon='DUPLICATE')
+        corner_box.label(text='3 выбранные грани · внутрь · 4K UVMap',icon='INFO')
+        corner_box.label(text='Копия появится справа от исходной стены',icon='INFO')
         if _bh_fixture_active(context):
             layout.separator()
             nav=layout.row(align=True)
@@ -8377,6 +8390,7 @@ class VIEW3D_PT_brick_hole_advanced(BRICKHOLE_PT_Base, bpy.types.Panel):
 
 
 CLASSES = (
+    bh0479_test_ui.OBJECT_OT_brick_hole_corner_test1_copy,
     MESH_OT_brick_hole_extrude,
     MESH_OT_brick_hole_preview,
     MESH_OT_brick_hole_flip_direction,

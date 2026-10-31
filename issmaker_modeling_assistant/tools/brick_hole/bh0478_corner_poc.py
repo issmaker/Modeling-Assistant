@@ -35,7 +35,7 @@ def _uv_orientation(face, layer):
                      for i in range(len(points)))
 
 
-def run_corner_test_one(obj, face_indices, depth=-0.491817831993103):
+def run_corner_test_one(obj, face_indices, depth=-0.491817831993103, output_mesh=None):
     if obj.type != 'MESH' or len(face_indices) != 3:
         raise ValueError('Нужны три полигона Mesh')
     mesh = obj.data
@@ -174,6 +174,11 @@ def run_corner_test_one(obj, face_indices, depth=-0.491817831993103):
             raise ValueError('Other host UV or mesh boundary changed')
         if any(len(e.link_faces)>2 for e in bm.edges):
             raise ValueError('Non-manifold edge created')
+        if output_mesh is not None:
+            if output_mesh is mesh or len(output_mesh.vertices) or len(output_mesh.polygons):
+                raise ValueError('Нужно пустое отдельное Mesh для TEST 1')
+            bm.to_mesh(output_mesh)
+            output_mesh.update()
         return {
             'case': 'MICRO_CORNER_THREE_QUADS',
             'status': 'PASS', 'depth_m': depth,
