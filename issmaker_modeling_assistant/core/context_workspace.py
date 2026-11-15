@@ -10,8 +10,6 @@ from math import isfinite
 
 TOOL_MODES={
     'UV_WALL': frozenset({'WALL','SURFACE','CORNICE'}),
-    'DWOS': frozenset({'FRAME','BOX','GLASS','CAD'}),
-    'BRICK_HOLE': frozenset({'PREVIEW','EDIT'}),
     'COLLISION': frozenset({'INSPECT','GROUPS'}),
 }
 

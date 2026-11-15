@@ -2,6 +2,7 @@ import math
 import bpy
 import json
 import weakref
+import sys
 from time import perf_counter
 from itertools import islice
 from bpy.app.handlers import persistent
@@ -45,12 +46,13 @@ from .surface_ui import draw_surface_annotations
 from .ghost_geometry import (central_segment, surface_rotation_ghost, cornice_full_path_ghost, place_info_popup)
 from .spatial_layout import layout_cards, interior_xy, stable_segment, camera_segment, floating_quick_rect, choose_semantic_anchor, semantic_edge_samples
 from .spatial_layout import card_attention, tether_distance
+from .offscreen_recovery import wall_path_visible, return_control_rect
+from .handle_spacing import separate_handle_pair
+from .preview_drawer_layout import preview_drawer_rect,preview_drawer_rows
 from .parameter_windows import EditorStack, changed_patch, draft_from_definition, FIELDS, visible_fields
+from .cap_state import cap_master_enabled, toggled_master_caps
 from .workspace_layout import WorkspaceLayoutManager, normalized_ui_scale
-from .studio_dock_layout import (dock_rect, dock_row_visibility, visible_dock_rows,
-                                 content_dock_rect, composed_rows, smoothing_step)
-from ..ui.dock_workspace_state import read_map, write_map, safe_strings
-from ..ui.preferences import active_ui_mode, get_preferences
+from ..ui.preferences import get_preferences
 from .resource_picker import (
     SmartResourcePicker, LABELS as RESOURCE_LABELS, assign_resource,
     current_resource, filter_rows, resources_for, validate_resource,
@@ -67,7 +69,30 @@ MODE_INFO = (
     ("CORNICE", "CORNICE", "Карниз"),
 )
 HOVER_PALETTE_PRESETS=((1.0,.20,.17),(.98,.58,.16),(.20,.72,1.0),(.68,.38,1.0),(.20,.90,.62),(.93,.93,.96))
-_ACTIVE_SESSIONS = weakref.WeakSet()
+def _resolve_active_sessions():
+    """Share the session registry across UMS loader's two controller aliases.
+
+    UMS may import this same source as UV_Wall_Professional.viewport.controller
+    and issmaker_modeling_assistant.tools.uv_wall.UV_Wall_Professional.viewport.controller.
+    Separate module globals make observability claim no active HUD, while its
+    modal operator is visibly running. Preserve weak ownership: Blender
+    still owns modal lifetime and _finish()/load_pre explicitly remove handlers.
+    """
+    names=(
+        "UV_Wall_Professional.viewport.controller",
+        "issmaker_modeling_assistant.tools.uv_wall.UV_Wall_Professional.viewport.controller",
+    )
+    current=sys.modules.get(__name__)
+    for name in names:
+        prior=sys.modules.get(name)
+        if prior is not None and prior is not current:
+            existing=getattr(prior,"_ACTIVE_SESSIONS",None)
+            if existing is not None:
+                return existing
+    return weakref.WeakSet()
+
+
+_ACTIVE_SESSIONS = _resolve_active_sessions()
 
 
 def ui_layout_snapshot():
@@ -76,9 +101,8 @@ def ui_layout_snapshot():
     for session in tuple(_ACTIVE_SESSIONS):
         try:
             stack=session._window_stack
-            size=(tuple(getattr(session,"_dock_region_size",(0,0)))
-                  if getattr(session,"_ui_mode",None)=="STUDIO_DOCK"
-                  else tuple(getattr(stack,"region_size",(0,0))) if stack is not None else (0,0))
+            size=(tuple(getattr(stack,"region_size",(0,0)))
+                  if stack is not None else (0,0))
             data["sessions"].append({
                 "ui_mode":getattr(session,"_ui_mode","UNKNOWN"),
                 "area_ptr":int(session._area_ptr),
@@ -89,7 +113,7 @@ def ui_layout_snapshot():
                     "kind":w.kind,"rect":list(w.rect()),
                     "pinned":bool(w.pinned),"collapsed":bool(w.collapsed),
                     "dirty_fields":int(w.dirty_count),"scroll":int(w.scroll),
-                    "visible_in_active_mode":getattr(session,"_ui_mode","")=="FLOATING_PRO",
+                    "visible_in_active_mode":True,
                 } for w in getattr(stack,"windows",())] if stack is not None else [],
                 "active_picker":str(getattr(session._resource_picker,"open_kind","") or ""),
                 "picker_layout":getattr(session,"_picker_layout_snapshot",None),
@@ -97,13 +121,6 @@ def ui_layout_snapshot():
                 "warning_rect":list(session._missing_resources_rect) if getattr(session,"_missing_resources_rect",None) else None,
                 "problem_rect":list(session._problem_rect) if getattr(session,"_problem_rect",None) else None,
                 "workspace_rect":list(session._workspace_rect) if session._workspace_rect else None,
-                "studio_dock_rect":list(session._dock_rectangle) if getattr(session,"_dock_rectangle",None) else None,
-                "studio_dock_scroll":int(getattr(session,"_dock_scroll",0)),
-                "studio_dock_collapsed":bool(getattr(session,"_dock_collapsed",False)),
-                "studio_dock_scroll_max":int(getattr(session,"_dock_scroll_max",0)),
-                "studio_dock_list_bounds":list(session._dock_list_bounds) if getattr(session,"_dock_list_bounds",None) else None,
-                "dock_drawn_region_size":list(session._dock_drawn_region_size) if getattr(session,"_dock_drawn_region_size",None) else None,
-                "dock_visible_rows":len(getattr(session,"_dock_active_rows",()) or ()),
                 "adaptive_editor_group_rect":list(session._window_stack.group_rect) if getattr(session,"_window_stack",None) and session._window_stack.group_rect else None,
                 "adaptive_editor_group_count":int(getattr(getattr(session,"_window_stack",None),"group_count",0)),
                 "workspace_anchor":list(session._window_stack.workspace_anchor) if getattr(session,"_window_stack",None) and session._window_stack.workspace_anchor else None,
@@ -116,19 +133,8 @@ def ui_layout_snapshot():
                     w.kind:bool(w.compact_rows)
                     for w in getattr(stack,"windows",())
                 } if stack is not None else {},
-                "dock_collapsed_sections":list(getattr(session,"_dock_collapsed_sections",()) or ()),
-                "dock_favorites":list(getattr(session,"_dock_favorites",()) or ()),
-                "dock_sizing_mode":str(getattr(get_preferences(),"dock_sizing","AUTO")),
-                "dock_theme":str(getattr(get_preferences(),"ui_scheme","OBSIDIAN")),
-                "dock_animation":str(getattr(get_preferences(),"ui_motion_quality","OFF")),
-                "dock_preset_names_by_mode":{
-                    mode:sorted(group)[:32]
-                    for mode,group in read_map(getattr(get_preferences(),"dock_presets_json","{}") if get_preferences() else '{}').items()
-                    if mode in {'WALL','SURFACE','CORNICE'} and isinstance(group,dict)
-                },
                 "display_rect":(list(display_panel_rect(*size))
-                    if (getattr(session,"_ui_mode",None)=="FLOATING_PRO"
-                        and all(size) and getattr(getattr(bpy.context,'window_manager',None),'uvwall_display_open',False))
+                    if (all(size) and getattr(getattr(bpy.context,'window_manager',None),'uvwall_display_open',False))
                     else None),
                 "last_draw_failure":str(getattr(session,"_draw_failure","") or ""),
             })
@@ -171,8 +177,8 @@ def _close_sessions_before_load(_unused):
         try:
             session._finish(bpy.context)
         except Exception:
-            # WeakSet prevents an unreachable modal instance from becoming a
-            # permanent strong-reference leak after Area/Window destruction.
+            # Weak ownership keeps a crashed/deleted modal operator from
+            # causing a permanent reference leak after Area destruction.
             _ACTIVE_SESSIONS.discard(session)
 
 
@@ -229,7 +235,7 @@ PREVIEW_MODE_ITEMS = (
 )
 
 
-# Centralised color tokens, shared by Studio Dock and Floating Pro.
+# Centralised color tokens for Floating Pro and its contextual editors.
 from issmaker_modeling_assistant.core import design_tokens as _iss_style
 from issmaker_modeling_assistant.core.workspace_components import component_visual as _workspace_visual
 from issmaker_modeling_assistant.core import viewport_skin as _viewport_skin
@@ -437,7 +443,7 @@ def viewport_tooltip(key, definition=None):
         'BOTTOM_LEVEL':'Смещение нижнего уровня · потяни по вертикали',
         'OFFSET':'Положение · потяни маркер · Tab — точное значение',
         'THICKNESS':'Толщина второй стены · потяни по нормали',
-        'W_CAP':'Крышки и торцы · верх/низ наследуют материал стены или имеют override',
+        'W_CAP':'Крышки · общий выключатель выключает обе, редактор позволяет отдельно менять верх и низ',
         'W_THICKNESS':'Настроить одинарную/двойную конструкцию; толщина только для двойной',
         'W_WALL':'Нормали одинарной стены или положение двойной относительно Path',
         'W_PLANT':'Настройки внутренней поверхности',
@@ -767,6 +773,71 @@ class UVWALL_OT_viewport_inspector(Operator):
         p = view3d_utils.location_3d_to_region_2d(region, rv3d, world)
         return None if p is None else (float(p.x), float(p.y))
 
+    def _wall_path_on_screen(self, context, region, analysis):
+        """Read-only viewport probe: user rotating away from WALL loses floating controls."""
+        chains=analysis.get("simple_chains",()) if analysis else ()
+        try:
+            return wall_path_visible(
+                chains,lambda point:self._screen(context,point),
+                float(region.width),float(region.height))
+        except (ReferenceError,RuntimeError,ValueError,TypeError):
+            # Never hide all controls due to a stale or invalid Blender wrapper.
+            return True
+
+    def _draw_wall_return_only(self, context, region):
+        """One reachable recovery action for the Floating Pro HUD.
+
+        Clear all stale clickable cards/drag handles when the wall is outside
+        the camera. Drawing only; no scene, camera, or Undo changes until click.
+        """
+        self._buttons=[]
+        self._handles=[]
+        self._spatial_anchors={}
+        self._spatial_rects={}
+        self._point_card_rects=[]
+        self._workspace_rect=None
+        self._hud_rect=None
+        bounds=return_control_rect(region.width,region.height,
+                                   viewport_ui_scale(context))
+        if bounds is not None:
+            x0,y0,x1,y1=bounds
+            self._button("WS:RETURN_WALL",x0,y0,x1-x0,y1-y0,
+                         "Вернуться к стене",False,True)
+            # The return action is the ONLY remaining control. Add a short
+            # theme-derived accent keyline for legibility on dark viewports,
+            # without creating another hitbox or replacing the button text.
+            accent=(*_iss_theme.from_preferences(get_preferences()).accent,.90)
+            self._ui_stroke((x0+7.,y0+3.),(x1-7.,y0+3.),accent,2.)
+
+    def _return_view_to_wall(self, context):
+        """Only changes viewport orbit/distance, never selection or authored geometry."""
+        area=getattr(context,'area',None)
+        space=getattr(context,'space_data',None)
+        view=getattr(space,'region_3d',None)
+        if area is None or view is None:
+            self._toast("Возврат к стене доступен только в 3D Viewport","WARNING")
+            return False
+        d=self._definition()
+        analysis=self._analysis()
+        chains=analysis.get('simple_chains',())
+        points=[point for chain in chains for point in chain.get('points',())]
+        if not points:
+            path=self._path()
+            if path is None or path.type!="MESH" or not path.data.vertices:
+                return False
+            points=[path.matrix_world @ v.co for v in path.data.vertices]
+        center=self._centroid()
+        radius=max((point-center).length for point in points)
+        if d is not None:
+            radius=max(radius,float(total_wall_height(d))*.8)
+        if view.view_perspective=='CAMERA':
+            view.view_perspective='PERSP'
+        view.view_location=center
+        view.view_distance=min(200000.,max(2.8,radius*3.0))
+        area.tag_redraw()
+        self._toast("Вид возвращён к стене","SUCCESS")
+        return True
+
     def _analysis(self):
         return self._engine.analysis if self._engine and self._engine.analysis else analyze_path(self._path())
 
@@ -916,7 +987,7 @@ class UVWALL_OT_viewport_inspector(Operator):
 
         self._path_name = path.name; self._path_ref = path; self._source_uid = ensure_source_uid(path, definition)
         self._workspace_ref = context.workspace
-        self._ui_mode = active_ui_mode(context)
+        self._ui_mode = "FLOATING_PRO"
         self._area_ptr = context.area.as_pointer(); self._region_ptr = region.as_pointer()
         self._engine = LivePreviewEngine(); self._engine.bind(path, definition); self._engine.update()
         self._preview_batch_state = None
@@ -942,10 +1013,9 @@ class UVWALL_OT_viewport_inspector(Operator):
         self._workspace_rect=None
         self._workspace_details=False; self._workspace_visible=True
         self._workspace_history_open=False
-        self._dock_scroll=0;self._dock_collapsed=False;self._dock_rectangle=None
-        self._dock_drawn_region_size=None;self._dock_list_bounds=None;self._dock_scroll_max=0
-        self._dock_active_rows=();self._dock_collapsed_sections=();self._dock_favorites=()
-        self._dock_height_previous=None
+        self._workspace_preview_open=False
+        self._workspace_show_seams=False
+        self._workspace_show_origin=True
         self._spatial_anchors={}; self._spatial_rects={}; self._spatial_previous={}
         self._smart_segment_key=None; self._quick_rect=None
         self._inside_analysis_ref=None; self._inside_cache_xy=None
@@ -1249,7 +1319,9 @@ class UVWALL_OT_viewport_inspector(Operator):
         # markers and never registered as an interactive handle. One red point
         # per independent WALL chain; closed loops therefore expose exactly
         # one controlled seam at their authored start.
-        if getattr(d, 'generator_type', '') == 'WALL' and getattr(geo, 'seam_points', None):
+        if (getattr(d, 'generator_type', '') == 'WALL'
+                and getattr(self,'_workspace_show_origin',True)
+                and getattr(geo, 'seam_points', None)):
             seam_batch = self._cached_preview_batch(
                 geo, 'AUTHORED_UV_SEAM', 'POINTS', shader,
                 lambda: [tuple(point) for point in geo.seam_points])
@@ -1257,10 +1329,51 @@ class UVWALL_OT_viewport_inspector(Operator):
                 gpu.state.depth_test_set('NONE')
                 gpu.state.point_size_set(13.0)
                 shader.bind()
-                shader.uniform_float('color', (1.0, 0.10, 0.13, 1.0))
+                theme=_iss_theme.from_preferences(get_preferences())
+                shader.uniform_float('color', (*theme.accent, 1.0))
                 seam_batch.draw(shader)
                 gpu.state.depth_test_set('LESS_EQUAL')
                 gpu.state.point_size_set(1.0)
+        # Show the REAL, committed UV seam edges: no fabricated module lines
+        # when the wall has not been built or its result is invalid/stale.
+        if (d.generator_type=='WALL'
+                and getattr(self,'_workspace_show_seams',False)):
+            try:
+                result=bpy.data.objects.get(d.last_result_name) if d.last_result_name else None
+                if (result is not None and result.type=='MESH'
+                        and result.get('uvwall_definition_uid','')==d.source_uid):
+                    mesh=result.data
+                    key=(mesh.as_pointer(),len(mesh.edges),
+                         int(getattr(d,'last_committed_revision',0)),
+                         tuple(round(float(x),6) for row in result.matrix_world for x in row))
+                    saved=getattr(self,'_uv_seam_lines_cache',None)
+                    if saved is None or saved[0]!=key:
+                        points=[]
+                        for edge in mesh.edges:
+                            if edge.use_seam:
+                                for index in edge.vertices:
+                                    points.append(tuple(result.matrix_world @ mesh.vertices[index].co))
+                                if len(points)>=12000:
+                                    break
+                        self._uv_seam_lines_cache=(key,points)
+                    else:
+                        points=saved[1]
+                    if points:
+                        overlay=batch_for_shader(shader,'LINES',{'pos':points})
+                        accent=_iss_theme.from_preferences(get_preferences()).accent
+                        gpu.state.depth_test_set('NONE')
+                        gpu.state.line_width_set(2.)
+                        shader.bind()
+                        shader.uniform_float('color',(*accent,.88))
+                        overlay.draw(shader)
+            except (ReferenceError,RuntimeError,TypeError,ValueError,AttributeError):
+                pass
+            finally:
+                try:
+                    gpu.state.depth_test_set('LESS_EQUAL')
+                    gpu.state.line_width_set(1.)
+                except (RuntimeError,AttributeError):
+                    pass
         # Red attention belongs to the GEOMETRY, not to its circular handle.
         # Draw real committed face roles for the current Definition only.
         focus=self._hover or ""
@@ -1315,7 +1428,7 @@ class UVWALL_OT_viewport_inspector(Operator):
         elif active: component_state='active'
         elif self._hover==key: component_state='hover'
         else: component_state='normal'
-        part='tab' if key.startswith(('MODE_', 'DOCK:MODE:')) else 'button'
+        part='tab' if key.startswith('MODE_') else 'button'
         shared_theme=_iss_theme.from_preferences(get_preferences())
         visual=_viewport_skin.component(part,component_state,'neutral',shared_theme)
         bg,border=visual.background,visual.border
@@ -1421,7 +1534,7 @@ class UVWALL_OT_viewport_inspector(Operator):
                 'W_THICKNESS:RIGHT':'Толщина · точное числовое поле, можно дописывать число',
                 'W_HEIGHT:LEFT':'Редактор высоты · ручка автоматически определяет верх и низ',
                 'W_HEIGHT:RIGHT':'Ввести точную высоту стены',
-                'W_CAP:LEFT':'Включить или выключить верхнюю крышку',
+                'W_CAP:LEFT':'Включить или выключить обе крышки; сверху и снизу в настройках раздельно',
                 'W_CAP:RIGHT':'Редактор крышек, торцов и материалов',
                 'W_PLANT:LEFT':'Включить или выключить внутреннюю поверхность',
                 'W_PLANT:RIGHT':'Параметры внутренней поверхности',
@@ -1793,6 +1906,8 @@ class UVWALL_OT_viewport_inspector(Operator):
     def _apply_workspace_button(self,key,context):
         picker=self._resource_picker;d=self._definition()
         if not key:return False
+        if key=='WS:RETURN_WALL':
+            return self._return_view_to_wall(context)
         if key=='CLEAN:EXIT':
             self._clean_preview=False;self._clean_button=None;return True
         if key=='RP:SEARCH':return True
@@ -1859,8 +1974,31 @@ class UVWALL_OT_viewport_inspector(Operator):
         if key=='WS:SHOW':
             self._workspace_visible=True
             return True
+        if key=='WS:CREATE_MATERIAL':
+            try:
+                bpy.ops.object.uv_wall_create_material('INVOKE_DEFAULT')
+            except (RuntimeError,AttributeError,TypeError,ValueError) as exc:
+                self._toast('Не удалось открыть Material Builder: '+str(exc)[:90],
+                            'ERROR',3.)
+            return True
         if key=='WS:PREVIEW':
-            self._clean_preview=not getattr(self,'_clean_preview',False)
+            self._workspace_preview_open=not getattr(self,'_workspace_preview_open',False)
+            self._workspace_history_open=False
+            self._workspace_details=False
+            if self._resource_picker:self._resource_picker.close_dropdown()
+            if context.area:context.area.tag_redraw()
+            return True
+        if key=='WS:PREVIEW:SEAMS':
+            self._workspace_show_seams=not getattr(self,'_workspace_show_seams',False)
+            if context.area:context.area.tag_redraw()
+            return True
+        if key=='WS:PREVIEW:ORIGIN':
+            self._workspace_show_origin=not getattr(self,'_workspace_show_origin',True)
+            if context.area:context.area.tag_redraw()
+            return True
+        if key=='WS:PREVIEW:CLEAN':
+            self._workspace_preview_open=False
+            self._clean_preview=True
             self._clean_button=None
             self._hover=None;self._marker_choice=None;self._marker_choice_rows=[]
             if context.area:context.area.tag_redraw()
@@ -2011,7 +2149,10 @@ class UVWALL_OT_viewport_inspector(Operator):
             self._button(f"RP:{kind}:VIEW",x+field_w+5,y,31,29,"◎",False,True)
         else:
             self._button(f"RP:{kind}:ACTIVE",x+field_w+5,y,31,29,"↙",False,True)
-        self._button(f"RP:{kind}:MORE",x+field_w+41,y,31,29,"⋮",False,item is not None)
+        create_material=(kind=="MATERIAL" and item is None)
+        self._button("WS:CREATE_MATERIAL" if create_material else f"RP:{kind}:MORE",
+                     x+field_w+41,y,31,29,"+" if create_material else "⋮",
+                     False,True if create_material else item is not None)
         if not compact:
             color=(.37,.91,.74,1) if valid else ((1.,.65,.27,1) if item else (.55,.63,.65,1))
             _text(x,y-14,(meta or reason)[:52],8,color)
@@ -2094,6 +2235,12 @@ class UVWALL_OT_viewport_inspector(Operator):
             self._workspace_rect=None
             return
         scale=viewport_ui_scale(context)
+        shared_theme=_iss_theme.from_preferences(get_preferences())
+        palette=_viewport_skin.shell(shared_theme)
+        workspace_surface=palette['panel']
+        workspace_border=palette['border']
+        workspace_header=palette['header']
+        workspace_accent=(*shared_theme.accent,.84)
         width=min(520.*scale,float(region.width)-24.*scale)
         x=(float(region.width)-width)*.5
         # Raise the rail away from the Blender timeline/footer and cursor.
@@ -2101,7 +2248,7 @@ class UVWALL_OT_viewport_inspector(Operator):
         if not self._workspace_visible:
             width=100.;x=(float(region.width)-width)*.5
             self._workspace_rect=(x,y,x+width,y+34.)
-            _draw_rect(x,y,x+width,y+34.,(.032,.045,.051,.96),(.25,.43,.40,.96))
+            _draw_rect(x,y,x+width,y+34.,workspace_surface,workspace_border)
             self._button('WS:SHOW',x+5,y+4,width-10,26,'▴ Показать',False,True)
             return
         # Five actions keep readable labels; narrow windows wrap into rows.
@@ -2113,17 +2260,15 @@ class UVWALL_OT_viewport_inspector(Operator):
             # Tiny Viewports keep one deliberate accessible control.
             rail_height=45.*scale
             self._workspace_rect=(x,y,x+width,y+rail_height)
-            _draw_editor_rounded(x,y,x+width,y+rail_height,(.031,.047,.052,.976),(.24,.39,.39,.98))
+            _draw_editor_rounded(x,y,x+width,y+rail_height,workspace_surface,workspace_border)
             self._button('WS:PREVIEW',x+6*scale,y+7*scale,width-12*scale,29*scale,'Просмотр',False,True)
             return
         self._workspace_rect=(x,y,x+width,y+rail_height)
-        _draw_rect(x-3,y-3,x+width+3,y+rail_height+3,(.005,.009,.013,.37))
-        _draw_editor_rounded(x,y,x+width,y+rail_height,(.031,.047,.052,.976),(.24,.39,.39,.98))
+        _draw_rect(x-3,y-3,x+width+3,y+rail_height+3,(*shared_theme.panel,.34))
+        _draw_editor_rounded(x,y,x+width,y+rail_height,workspace_surface,workspace_border)
         from issmaker_modeling_assistant.core.studio_gpu_components import shell_background
-        from issmaker_modeling_assistant.core import theme_engine
-        addon=bpy.context.preferences.addons.get('issmaker_modeling_assistant')
-        shell_background(theme_engine.from_preferences(addon.preferences if addon else None),(x,y,x+width,y+rail_height))
-        _draw_rect(x+8,y+rail_height-2,x+width-8,y+rail_height,(.35,.84,.70,.70))
+        shell_background(shared_theme,(x,y,x+width,y+rail_height))
+        _draw_rect(x+8,y+rail_height-2,x+width-8,y+rail_height,workspace_accent)
         needed=self._setup_requirement(d)
         captions=('Ресурсы','Проверка',
                   ('Профиль' if needed and needed[0]=='PROFILE' else 'Путь') if needed else
@@ -2137,9 +2282,36 @@ class UVWALL_OT_viewport_inspector(Operator):
         for i,(key,caption) in enumerate(zip(kinds,captions)):
             col=i%cols;row=i//cols
             self._button(key,x+6*scale+col*(cell_w+5.*scale),y+7*scale+row*35*scale,cell_w,29*scale,caption,
-                         key=='BUILD' or (key=='WS:PREVIEW' and getattr(self,'_clean_preview',False)),True)
+                         key=='BUILD' or (key=='WS:PREVIEW' and getattr(self,'_workspace_preview_open',False)),True)
         # Resource/setup panels start above the ENTIRE rail, not in its cells.
         tray_anchor_y=y+rail_height+7.
+        if getattr(self,'_workspace_preview_open',False):
+            bounds=preview_drawer_rect(
+                (x,y,x+width,y+rail_height),
+                float(region.width),float(region.height),scale)
+            if bounds is not None:
+                px,py,px1,py1=bounds
+                _draw_editor_rounded(*bounds,workspace_surface,workspace_border)
+                _text(px+11*scale,py1-24*scale,
+                      "ПРОСМОТР · ТОЛЬКО ОТОБРАЖЕНИЕ",
+                      10,_viewport_skin.ink(shared_theme))
+                labels=(
+                    ("WS:PREVIEW:SEAMS",
+                     "UV-швы готовой стены" if not self._workspace_show_seams
+                     else "UV-швы · включены",
+                     self._workspace_show_seams),
+                    ("WS:PREVIEW:ORIGIN",
+                     "Стартовая точка / UV-начало",
+                     self._workspace_show_origin),
+                    ("WS:PREVIEW:CLEAN","Чистый вид · скрыть HUD",False),
+                )
+                for (key,label,active),rect in zip(
+                        labels,preview_drawer_rows(bounds,scale)):
+                    bx,by,bx1,by1=rect
+                    self._button(key,bx,by,bx1-bx,by1-by,label,active,True)
+                self._workspace_rect=(min(x,px),min(y,py),
+                                      max(x+width,px1),max(y+rail_height,py1))
+            return
         if getattr(self,'_workspace_history_open',False):
             from ..core.revisions import PROPERTY, parse_ledger
             path=self._path();owner_uid=str(getattr(d,'source_uid','') or '')
@@ -2159,10 +2331,10 @@ class UVWALL_OT_viewport_inspector(Operator):
             hx=x;hy=tray_anchor_y;hw=width
             self._workspace_rect=(min(x,hx),y,max(x+width,hx+hw),hy+history_h)
             _draw_editor_rounded(hx,hy,hx+hw,hy+history_h,
-                                 (.031,.047,.052,.976),(.28,.53,.47,.98))
-            _text(hx+13.,hy+history_h-20.*scale,'ИСТОРИЯ · ПРИНЯТЫЕ ПАРАМЕТРЫ',10,(.82,.98,.92,1))
+                                 workspace_surface,workspace_border)
+            _text(hx+13.,hy+history_h-20.*scale,'ИСТОРИЯ · ПРИНЯТЫЕ ПАРАМЕТРЫ',10,_viewport_skin.ink(shared_theme))
             if history_message:
-                _text(hx+13.,hy+history_h-43.*scale,_short_label(history_message,hw-25,10),10,(.71,.79,.79,1))
+                _text(hx+13.,hy+history_h-43.*scale,_short_label(history_message,hw-25,10),10,_viewport_skin.ink(shared_theme,kind="muted"))
             for index,entry in enumerate(entries):
                 row_y=hy+history_h-(58.+index*35.)*scale
                 detail=describe_revision(entry,ledger,max_fields=1)
@@ -2191,10 +2363,10 @@ class UVWALL_OT_viewport_inspector(Operator):
         tray_y=y+58.
         top=tray_y+tray_height
         self._workspace_rect=(tray_x,tray_y if y>tray_y else y,tray_x+tray_width,top)
-        _draw_rect(tray_x,tray_y,tray_x+tray_width,top,(.032,.048,.051,.985),(.24,.46,.41,.95))
-        _draw_rect(tray_x,top-34,tray_x+tray_width,top,(.058,.094,.087,.99))
+        _draw_rect(tray_x,tray_y,tray_x+tray_width,top,workspace_surface,workspace_border)
+        _draw_rect(tray_x,top-34,tray_x+tray_width,top,workspace_header)
         tray_title='РЕСУРСЫ · '+{'WALL':'СТЕНА','SURFACE':'ПОВЕРХНОСТЬ','CORNICE':'КАРНИЗ'}.get(d.generator_type,d.generator_type)
-        _text(tray_x+13,top-24,_short_label(tray_title,tray_width-66,10),10,(.91,.97,.95,1))
+        _text(tray_x+13,top-24,_short_label(tray_title,tray_width-66,10),10,_viewport_skin.ink(shared_theme))
         # Drawer collapses back into Resources; no duplicate Hide action.
         self._button('WS:TOGGLE',tray_x+tray_width-42,top-29,29,23,'−',False,True)
         if tray_height<165.*scale:
@@ -2215,8 +2387,13 @@ class UVWALL_OT_viewport_inspector(Operator):
                 _text(tray_x+13,tray_y+35,'УГЛЫ НАСТРАИВАЮТСЯ НА ТОЧКАХ ПУТИ',8,(.55,.73,.70,1))
                 _text(tray_x+13,tray_y+18,'Нажмите маркер вершины → Плавный / Острый',8,(.68,.80,.79,1))
             elif not is_cornice and tray_height>=190.*scale:
-                self._button('PREVIEW_REFRESH',tray_x+13,tray_y+10,tray_width-26,27,
-                             'Обновить предпросмотр',False,True)
+                if current_resource('MATERIAL',self._path(),d) is None:
+                    self._button('WS:CREATE_MATERIAL',tray_x+13,tray_y+10,
+                                 tray_width-26,27,'Создать материал D / ERM / N',
+                                 False,True)
+                else:
+                    self._button('PREVIEW_REFRESH',tray_x+13,tray_y+10,tray_width-26,27,
+                                 'Обновить предпросмотр',False,True)
 
     def _picker_allocator(self, context, region):
         """Only one frame-local placement authority; NEVER accept peer overlap.
@@ -2234,9 +2411,7 @@ class UVWALL_OT_viewport_inspector(Operator):
         if getattr(self,"_workspace_rect",None):layout.reserve('WORKSPACE',self._workspace_rect)
         if getattr(self,"_problem_rect",None):layout.reserve('PROBLEM',self._problem_rect)
         if getattr(self,"_corner_popup_rect",None):layout.reserve('CORNICE_EDITOR',self._corner_popup_rect)
-        if getattr(self,"_dock_rectangle",None) and active_ui_mode(context)=='STUDIO_DOCK':
-            layout.reserve('STUDIO_DOCK',self._dock_rectangle)
-        if self._window_stack is not None and active_ui_mode(context)!='STUDIO_DOCK':
+        if self._window_stack is not None:
             group=self._window_stack.group_rect
             if group is not None:
                 layout.reserve('JOINED_EDITOR_WORKSPACE',group)
@@ -2638,19 +2813,15 @@ class UVWALL_OT_viewport_inspector(Operator):
         self._picker_rect=None; self._missing_resources_rect=None
         self._picker_layout_snapshot=None; self._problem_rect=None
         self._corner_popup_rect=None
-        if active_ui_mode(context) == "STUDIO_DOCK":
-            self._spatial_rects={}
-            self._hud_rect=None
-            self._workspace_rect=None
-            region=self._region(context.area)
-            if region is not None:
-                self._draw_studio_dock(context,region,d)
-                if d is not None and self._path() is not None:
-                    self._draw_corner_tools(context,self._path(),d)
-            return  # Studio controls remain in one responsive inspector.
         geo=self._engine.update(); analysis=self._analysis(); centroid=self._centroid()
         region=self._region(context.area)
         if region is None or region.width<105 or region.height<100:return
+        # A single reachable action replaces every offscreen floating control;
+        # hovering the hidden wall cannot leave stale screen hitboxes active.
+        if (d.generator_type=="WALL"
+                and not self._wall_path_on_screen(context,region,analysis)):
+            self._draw_wall_return_only(context,region)
+            return
         self._spatial_anchors={}
         self._point_card_rects=[]
         # Context transition cannot leave old CAP / PLANT drafts floating over
@@ -2669,7 +2840,13 @@ class UVWALL_OT_viewport_inspector(Operator):
         y=max(8.*mode_scale,float(region.height)-113.0*mode_scale)
         self._hud_rect=(x,y,x+hud_w,y+66.*mode_scale)
         effect=getattr(context.window_manager,"uvwall_visual_effect","GRAPHITE")
-        hud_bg,hud_border,accent=_visual_palette(effect)
+        # Effect presets may change interior decoration/geometry preview,
+        # never the base HUD chrome. Base surfaces follow the user's accent.
+        hud_theme=_iss_theme.from_preferences(get_preferences())
+        shared_skin=_viewport_skin.shell(hud_theme)
+        hud_bg=shared_skin['panel']
+        hud_border=shared_skin['border']
+        accent=(*hud_theme.accent,1.0)
         _draw_rect(x,y,x+hud_w,y+66.*mode_scale,hud_bg,hud_border)
         if effect=="BLUEPRINT":
             for gx in range(int(x)+12,int(x+hud_w)-8,24):
@@ -2678,7 +2855,9 @@ class UVWALL_OT_viewport_inspector(Operator):
             for i,gy in enumerate(range(int(y)+10,int(y)+60,14)):
                 inset=7+(i%3)*8
                 _draw_rect(x+inset,gy,x+hud_w-inset,gy+1,(.30,.68,.58,.035))
-        _text(x+12*mode_scale,y+45*mode_scale,(f"UV WALL · {path.name[:24]}" if hud_w>235 else "UV WALL"),11,(.92,.96,.97,1))
+        _text(x+12*mode_scale,y+45*mode_scale,
+              (f"UV WALL · {path.name[:24]}" if hud_w>235 else "UV WALL"),
+              11,_viewport_skin.ink(hud_theme))
         if hud_w>200:
             result_state,result_color=_result_state(d)
             if geo.status.startswith("БЫСТРЫЙ КОНТУР"):
@@ -2782,10 +2961,30 @@ class UVWALL_OT_viewport_inspector(Operator):
                     thp=self._screen(context,tp)
                     thp=self._safe_handle_screen(context,thp,self._screen(context,mid),dx=-27.,dy=24.) if thp is None or not (22.<thp[0]<region.width-22. and 22.<thp[1]<region.height-22.) else thp
                     if thp:
-                        _draw_circle(thp,10 if self._hover=='THICKNESS' or self._drag_kind=='THICKNESS' else 7,(0.96,0.72,0.28,0.96),2.0,True)
-                        self._register_handle("THICKNESS",thp,15.0,mid=tp,norm=norm*direction,
-                                              sensitivity=sensitivity)
-                        self._spatial_anchors["W_THICKNESS"]=thp
+                        # Visually distinguish two very close 3D handles.  Only
+                        # the screen hit target moves; drag math still uses tp
+                        # and the original physical normal/direction.
+                        # Include height/bottom and other existing handles:
+                        # separating ONLY OFFSET/THICKNESS can still create an
+                        # ambiguous click where a third hitbox already lives.
+                        obstacles=((pos,radius) for key,pos,radius,_ in self._handles
+                                   if key!="OFFSET")
+                        spaced,moved=separate_handle_pair(
+                            offp,thp,region.width,region.height,min_gap=42.,
+                            pad=20.,obstacles=obstacles,
+                            offset_radius=16.,thickness_radius=15.,clearance=8.)
+                        if spaced is not None:
+                            if moved:
+                                self._ui_stroke(thp,spaced,(.96,.72,.28,.65),1.5)
+                            _draw_circle(spaced,10 if self._hover=='THICKNESS' or self._drag_kind=='THICKNESS' else 7,(0.96,0.72,0.28,0.96),2.0,True)
+                            self._register_handle("THICKNESS",spaced,15.0,
+                                                  mid=tp,norm=norm*direction,
+                                                  sensitivity=sensitivity)
+                        # A too-small viewport must never register two
+                        # overlapping hitboxes. Keep the thickness CARD
+                        # available for exact numeric editing regardless.
+                        self._spatial_anchors["W_THICKNESS"]=(spaced if spaced is not None
+                                                              else (offp or thp))
         # WALL: direct editing of the actual authored path vertex elevation.
         # No source Mesh mutation occurs during drag: LivePreview uses a
         # transient Z override, and the production operator owns the Undo step.
@@ -2913,7 +3112,7 @@ class UVWALL_OT_viewport_inspector(Operator):
                           if d.create_inner else
                           "Нормали · "+{'OUTWARD':'Наружу','INWARD':'Внутрь',
                                         'PATH_LEFT':'Влево','PATH_RIGHT':'Вправо'}.get(d.wall_normal_mode,'Выберите')),
-                "W_CAP":"Крышка · Вкл" if d.create_top_cap else "Крышка · Выкл",
+                "W_CAP":"Крышки · Вкл" if cap_master_enabled(d.create_top_cap,d.create_bottom_cap) else "Крышки · Выкл",
                 "W_PLANT":"Клумба · Вкл" if d.create_inner_surface else "Клумба · Выкл",
             }
             if not eligibility['W_CAP']:
@@ -3016,7 +3215,7 @@ class UVWALL_OT_viewport_inspector(Operator):
                     (.33,.84,.72,.65) if state in ('focused','hover') else (.28,.48,.44,.26))
                 batch.draw(shader)
             split_hover=(self._hover==key or str(self._hover or '').startswith(key+':'))
-            enabled_second=(d.create_top_cap if key=='W_CAP' else
+            enabled_second=(cap_master_enabled(d.create_top_cap,d.create_bottom_cap) if key=='W_CAP' else
                             d.create_inner_surface if key=='W_PLANT' else
                             d.create_inner if key=='W_THICKNESS' else True)
             zones=([] if key=='C_PROFILE' else
@@ -3298,7 +3497,7 @@ class UVWALL_OT_viewport_inspector(Operator):
             if getattr(context.window_manager,'uvwall_display_open',False):
                 window_obstacles.append(display_panel_rect(region.width,region.height,viewport_ui_scale(context)))
             # Viewport Awareness: protect the active projected handle (and
-            # currently edited semantic marker) from the right dock whenever
+            # currently edited semantic marker) from floating editors whenever
             # the viewport has room. This is a SOFT preference; UI obstacles
             # remain strict. We never mutate model geometry or pointer routes.
             from issmaker_modeling_assistant.core.context_workspace import project_focus_rects
@@ -3343,9 +3542,7 @@ class UVWALL_OT_viewport_inspector(Operator):
         self._draw_toast(region)
         prefs=get_preferences(context)
         if _ui_profile(prefs).debug:
-            # The favorite star is a deliberate child inside a dock row.
-            peer=[(key,rect) for key,rect,enabled in self._buttons
-                  if enabled and not str(key).startswith('DOCK:FAVORITE:')]
+            peer=[(key,rect) for key,rect,enabled in self._buttons if enabled]
             _record_ui_layout('UV_WALL',region.width,region.height,peer)
             for key,rect in peer[:250]:
                 try:
@@ -3356,61 +3553,6 @@ class UVWALL_OT_viewport_inspector(Operator):
                 except (TypeError,ValueError,RuntimeError):
                     continue
 
-    def _dock_field_row(self, key, x, y, w, h, label, raw, kind):
-        """Draw a clearly-addressed, two-column inspector control.
-
-        Draw and hit testing share the same bounds.  Separate key identity
-        prevents cap/top and bottom-cap resource fields being interchanged.
-        """
-        bounds=(x,y,x+w,y+h)
-        mouse=getattr(self,'_last_mouse',(-10000.,-10000.))
-        hovered=_rect_hit(mouse[0],mouse[1],bounds)
-        if kind=='TOGGLE':
-            value='ВКЛ' if bool(raw) else 'ВЫКЛ'
-        elif kind=='RESOURCE':
-            value=getattr(raw,'name','Не выбран') if raw is not None else 'Не выбран'
-        elif isinstance(raw,float):
-            value=('%0.3f' % raw).rstrip('0').rstrip('.')
-        elif isinstance(raw,bool):
-            value='ВКЛ' if raw else 'ВЫКЛ'
-        else:
-            value=str(raw) if raw is not None else '—'
-        theme=_iss_theme.from_preferences(get_preferences())
-        field_state='hover' if hovered else 'normal'
-        from issmaker_modeling_assistant.core.studio_gpu_components import draw_component
-        if not draw_component(bounds,part='field',state=field_state,theme=theme):
-            visual=_viewport_skin.component('field',field_state,theme=theme)
-            _draw_rect(x,y,x+w,y+h,visual.background,visual.border)
-        left_width=w*.55
-        _text(x+12,y+(h-10)*.5,
-              _short_label(label,left_width-18.,_viewport_skin.text_px('control')),
-              _viewport_skin.text_px('control'),_viewport_skin.ink(theme))
-        tag_w=max(44.,min(w*.36,w-left_width-38.))
-        tag_x=x+w-tag_w-31.
-        if kind=='TOGGLE':
-            tag_state='active' if bool(raw) else 'quiet'
-            tag_role='primary' if bool(raw) else 'neutral'
-        elif kind=='RESOURCE' and raw is None:
-            tag_state='normal'; tag_role='warning'
-        else:
-            tag_state='normal'; tag_role='neutral'
-        tag_rect=(tag_x,y+4.,x+w-28.,y+h-4.)
-        tag_visual=_viewport_skin.component('tab',tag_state,tag_role,theme)
-        if not draw_component(tag_rect,part='tab',state=tag_state,
-                              role=tag_role,theme=theme):
-            _draw_rect(*tag_rect,tag_visual.background,tag_visual.border)
-        tag_fg=_viewport_skin.control_ink(theme,part='tab',state=tag_state,role=tag_role)
-        tag_font=_viewport_skin.text_px('caption')
-        _text(tag_x+(tag_w-3)*.5,y+(h-tag_font)*.5,
-              _short_label(value,tag_w-10.,tag_font),tag_font,tag_fg,'CENTER')
-        self._buttons.append((key,bounds,True))
-        # One small star hitbox per field, after full-row target for priority.
-        fav_key=key[5:] if key.startswith('DOCK:') else key
-        star=(x+w-27.,y+4.,x+w-3.,y+h-4.)
-        is_fav=fav_key in (getattr(self,'_dock_favorites',()) or ())
-        _text(x+w-15.,y+(h-10)*.5,'★' if is_fav else '☆',12,
-              (.96,.76,.32,1.) if is_fav else (.50,.61,.63,1.),'CENTER')
-        self._buttons.append(('DOCK:FAVORITE:'+fav_key,star,True))
 
     def _is_closed_path(self):
         try:
@@ -3418,301 +3560,8 @@ class UVWALL_OT_viewport_inspector(Operator):
         except (AttributeError,ReferenceError,RuntimeError,ValueError,TypeError):
             return False
 
-    def _draw_studio_dock(self,context,region,definition):
-        """Viewport-native inspector: one owned visual + interaction surface."""
-        self._dock_region_size=(int(region.width),int(region.height))
-        self._dock_drawn_region_size=self._dock_region_size
-        self._dock_list_bounds=None;self._dock_scroll_max=0
-        prefs=get_preferences(context)
-        mode=definition.generator_type
-        collapsed=safe_strings(read_map(getattr(prefs,'dock_sections_json','{}')),mode)
-        favorites=safe_strings(read_map(getattr(prefs,'dock_favorites_json','{}')),mode,
-                               {k for k,_ in dock_row_visibility(mode,definition,path_closed=self._is_closed_path()) if k!='SECTION'})
-        rows=composed_rows(mode,definition,collapsed,favorites,path_closed=self._is_closed_path())
-        self._dock_active_rows=rows
-        self._dock_collapsed_sections=collapsed
-        self._dock_favorites=favorites
-        scale=viewport_ui_scale(context)
-        rect=content_dock_rect(region.width,region.height,scale,rows,
-                               getattr(prefs,'dock_sizing','AUTO'),
-                               getattr(prefs,'dock_manual_width',350),
-                               getattr(prefs,'dock_manual_height',620))
-        if rect is None:
-            window_visibility.observe(window_visibility.scope_from_context(context,region=region),
-                                      'UV_WALL_STUDIO_DOCK',None)
-            self._dock_rectangle=None
-            self._workspace_rect=None
-            return
-        x,y,w,h=rect
-        # Smooth resizing remains bounded and anchored to same upper edge.
-        if _iss_theme.from_preferences(prefs).motion!='OFF' and h>=344*scale:
-            previous=getattr(self,'_dock_height_previous',None)
-            animated=smoothing_step(previous,h,.42)
-            if abs(h-animated)>.8 and context.area is not None:
-                context.area.tag_redraw()
-            animated=min(animated,content_dock_rect(region.width,region.height,scale,rows,
-                               'MANUAL',getattr(prefs,'dock_manual_width',350),1100)[3])
-            y+=h-animated
-            h=animated
-        # Strict placement shared with DWOS, Brick Hole and Collision HUD.
-        # The source Dock rectangle is a preference, never permission to cover
-        # another committed viewport window or Blender's navigation chrome.
-        dock_scope=window_visibility.scope_from_context(context,region=region)
-        dock_key='UV_WALL_STUDIO_DOCK'
-        badge_only=bool(self._dock_collapsed or h<344*scale or w<280*scale)
-        occupied_height=min(h,48.*scale) if badge_only else h
-        placed=place_unobstructed(
-            (region.width,region.height),dock_key,(w,occupied_height),(x,y+h-occupied_height),
-            blockers=blender_chrome_obstacles(region.width,region.height,scale),
-            margin=8.,gap=6.,scope=dock_scope)
-        auto_compact=False
-        if placed is None and not badge_only:
-            # Graceful non-interactive badge when other windows occupy the Dock.
-            # No full-window hitboxes are created for a panel we did not draw.
-            occupied_height=min(h,48.*scale)
-            placed=place_unobstructed(
-                (region.width,region.height),dock_key,(w,occupied_height),
-                (x,y+h-occupied_height),
-                blockers=blender_chrome_obstacles(region.width,region.height,scale),
-                margin=8.,gap=6.,scope=dock_scope)
-            auto_compact=placed is not None
-        if placed is None:
-            # Fail closed: hidden windows cannot retain clickable old rows.
-            self._dock_rectangle=None
-            self._dock_list_bounds=None
-            self._workspace_rect=None
-            self._dock_scroll_max=0
-            return
-        badge_only=badge_only or auto_compact
-        x,y=placed[0],placed[1]
-        self._dock_height_previous=h
-        self._dock_rectangle=(x,y,placed[2],placed[3])
-        theme=_ui_theme(context)
-        panel,border,header,accent=theme['panel'],theme['border'],theme['header'],theme['accent']
-        if badge_only:
-            badge_h=occupied_height
-            self._dock_rectangle=(x,y,x+w,y+badge_h)
-            _draw_editor_rounded(*self._dock_rectangle,panel,border)
-            _draw_rect(x,y+badge_h-3.,x+w,y+badge_h,accent)
-            too_short=auto_compact or h<344*scale or w<280*scale
-            if too_short:
-                # No fake Expand hitbox: an expanded inspector could never fit
-                # into this viewport. It will recover automatically on resize.
-                message=_short_label('UV WALL · Нужна свободная область Viewport',max(0.,w-18.),11)
-                _text(x+9.,y+max(12.,(badge_h-8.)*.5),message,11,theme['subtitle'])
-            else:
-                self._button('DOCK:EXPAND',x+8.,y+7.,w-16.,max(20.,badge_h-14.),
-                             'UV WALL  ·  Развернуть',False,True)
-            return
-        _draw_rect(x-4,y-4,x+w+4,y+h+4,(.006,.012,.016,.45))
-        _draw_editor_rounded(x,y,x+w,y+h,panel,border)
-        from issmaker_modeling_assistant.core import theme_engine
-        from issmaker_modeling_assistant.core.studio_gpu_components import shell_background
-        addon=bpy.context.preferences.addons.get('issmaker_modeling_assistant')
-        shared=theme_engine.from_preferences(addon.preferences if addon else None)
-        shell_background(shared,(x,y,x+w,y+h))
-        top=y+h
-        header_h=45.*scale
-        _draw_rect(x+1,top-header_h,x+w-1,top-1,header)
-        _draw_rect(x+1,top-3,x+w-1,top,accent)
-        _text(x+14.,top-27.*scale,'UV WALL',_viewport_skin.text_px('title'),_viewport_skin.ink(shared))
-        _text(x+100.*scale,top-26.*scale,'STUDIO',_viewport_skin.text_px('caption'),_viewport_skin.ink(shared,kind='muted'))
-        self._button('DOCK:PRESETS',x+w-141.*scale,top-36.*scale,90.*scale,26.*scale,'Пресеты',False,True)
-        self._button('DOCK:COLLAPSE',x+w-42.*scale,top-36.*scale,29.*scale,26.*scale,'−',False,True)
-        # Consistent segmented control; selected mode is readable at a glance.
-        modes=(('WALL','Стена'),('SURFACE','Плоскость'),('CORNICE','Карниз'))
-        gap=5.*scale;mw=(w-28.*scale-2*gap)/3.
-        for i,(kind,label) in enumerate(modes):
-            self._button('DOCK:MODE:'+kind,x+14.*scale+i*(mw+gap),top-87.*scale,mw,30.*scale,
-                         label,definition.generator_type==kind,True)
-        _text(x+14.,top-111.*scale,'ИСТОЧНИК',10,_viewport_skin.ink(shared,kind='muted'))
-        path=self._path()
-        path_name=getattr(path,'name','Не выбран')
-        _text(x+14.,top-129.*scale,_short_label(path_name,w-108.*scale,11),11,_viewport_skin.ink(shared))
-        self._button('RP:PATH:OPEN',x+w-94.*scale,top-135.*scale,79.*scale,28.*scale,'Сменить',False,True)
-        state,state_color=_result_state(definition)
-        _draw_rect(x+13,top-168.*scale,x+w-13,top-143.*scale,
-                   _viewport_skin.component('card',theme=shared).background)
-        _draw_rect(x+15,top-166.*scale,x+18,top-145.*scale,state_color)
-        _text(x+26.,top-161.*scale,'RESULT · '+_short_label(state,w-62.,10),10,_viewport_skin.ink(shared))
-        # A compact asset toolbar, fixed above scrolling fields.
-        gap=7.*scale
-        half=(w-28.*scale-gap)*.5
-        no_material=current_resource('MATERIAL',self._path(),definition) is None
-        self._button('RP:MATERIAL:OPEN',x+14.*scale,top-205.*scale,w-28.*scale,29.*scale,
-                     'Материал: нет' if no_material else 'Материал',False,True)
-        list_top=top-219.*scale
-        footer_h=83.*scale
-        footer_top=y+footer_h
-        line_h=36.*scale
-        available=max(0.,list_top-footer_top)
-        capacity=max(0,int(available//line_h))
-        visible,scroll,max_scroll=visible_dock_rows(rows,self._dock_scroll,capacity)
-        self._dock_scroll=scroll;self._dock_scroll_max=max_scroll
-        self._dock_list_bounds=(x+11*scale,footer_top,x+w-11*scale,list_top)
-        if capacity<1:
-            _text(x+13,footer_top+14.,'Увеличьте высоту области 3D View',10,_viewport_skin.ink(shared,kind='muted'))
-        for i,(key,label) in enumerate(visible):
-            row_top=list_top-i*line_h
-            row_y=row_top-line_h+4.*scale
-            if key=='SECTION':
-                _draw_rect(x+11*scale,row_y+2*scale,x+w-11*scale,row_y+line_h-5*scale,
-                           _viewport_skin.component('header',theme=shared).background)
-                _draw_rect(x+11*scale,row_y+2*scale,x+14*scale,row_y+line_h-5*scale,accent)
-                marker='▸' if label in collapsed else '▾'
-                _text(x+19.*scale,row_y+11*scale,_short_label(marker+'  '+label,w-42.*scale,10),10,_viewport_skin.ink(shared,kind='muted'))
-                if label!='ИЗБРАННОЕ':
-                    self._buttons.append(('DOCK:SECTION:'+label,
-                                          (x+11*scale,row_y+2*scale,x+w-11*scale,row_y+line_h-5*scale),True))
-                continue
-            field=key.split(':',1)[1]
-            raw=getattr(definition,field,None)
-            self._dock_field_row('DOCK:'+key,x+13*scale,row_y,w-26*scale,line_h-6*scale,label,raw,key.split(':',1)[0])
-        if max_scroll>0 and available>=line_h:
-            # Thin progress track — passive, cannot swallow pointer events.
-            track_x=x+w-8*scale;track_top=list_top-4*scale
-            track_bottom=footer_top+5*scale;track_height=track_top-track_bottom
-            if track_height>12*scale:
-                _draw_rect(track_x,track_bottom,track_x+2*scale,track_top,(.12,.18,.19,.68))
-                thumb_h=max(12*scale,track_height*(capacity/max(1,len(rows))))
-                thumb_y=track_top-thumb_h-(scroll/max_scroll)*(track_height-thumb_h)
-                _draw_rect(track_x-1*scale,thumb_y,track_x+3*scale,thumb_y+thumb_h,accent)
-        # Never move/scroll the primary actions; always use same bounds.
-        _draw_rect(x+8*scale,y+7*scale,x+w-8*scale,footer_top-4*scale,
-                   _viewport_skin.component('card',theme=shared).background)
-        self._button('DOCK:BUILD',x+13*scale,y+43*scale,w-26*scale,29*scale,
-                     '✓  ПОСТРОИТЬ / ПРИМЕНИТЬ',True,True)
-        left=(w-32*scale)*.55
-        self._button('DOCK:COLOR',x+13*scale,y+13*scale,left,25*scale,'Палитра цвета',False,True)
-        count=active_problem_count(context.scene.uv_wall_settings)
-        self._button('DOCK:PROBLEMS',x+18*scale+left,y+13*scale,w-left-31*scale,25*scale,
-                     'Проверка'+(' · '+str(count) if count else ''),False,True)
-        # Color preview shows the actual selected hue; still opens native HSV wheel.
-        rgb=tuple(float(v) for v in context.scene.uv_wall_settings.viewport_hover_color)
-        _draw_rect(x+17*scale,y+19*scale,x+27*scale,y+32*scale,(*rgb,1.),(.85,.93,.90,.94))
-        self._workspace_rect=self._dock_rectangle
-        self._draw_toast(region)
-        if self._resource_picker is not None and (self._resource_picker.open_kind or self._resource_picker.viewport_kind):
-            self._draw_picker_dropdown(context,region)
 
-    def _handle_studio_dock_event(self,context,event,x,y,region):
-        """Hitboxes only belong to the most recently drawn valid dock geometry."""
-        current_size=(int(region.width),int(region.height))
-        if self._dock_drawn_region_size != current_size:
-            # Do not apply the old pixel hitbox to a newly resized viewport.
-            # Redraw and allow Blender navigation while layout catches up.
-            if context.area is not None:context.area.tag_redraw()
-            return None
-        picker=self._resource_picker
-        if (picker is not None and picker.open_kind
-                and not window_visibility.is_hidden(window_visibility.scope_from_context(context,region=region),
-                                                     'UV_WALL_RESOURCE_PICKER')):
-            rows=self._resource_rows(picker.open_kind)
-            if event.value=='PRESS':
-                if event.type in {'ESC','RIGHTMOUSE'}:
-                    picker.close_dropdown();return {'RUNNING_MODAL'}
-                if event.type in {'WHEELUPMOUSE','WHEELDOWNMOUSE'}:
-                    delta=-1 if event.type=='WHEELUPMOUSE' else 1
-                    picker.active_index=max(0,min(max(0,len(rows)-1),picker.active_index+delta))
-                    return {'RUNNING_MODAL'}
-                if event.type in {'UP_ARROW','DOWN_ARROW'}:
-                    delta=-1 if event.type=='UP_ARROW' else 1
-                    picker.active_index=max(0,min(max(0,len(rows)-1),picker.active_index+delta))
-                    return {'RUNNING_MODAL'}
-                if event.type in {'RET','NUMPAD_ENTER'}:
-                    if rows and 0<=picker.active_index<len(rows):
-                        self._apply_resource(picker.open_kind,rows[picker.active_index][0],context)
-                    return {'RUNNING_MODAL'}
-                if event.type=='BACK_SPACE':
-                    picker.query=picker.query[:-1];return {'RUNNING_MODAL'}
-                char=getattr(event,'unicode','') or ''
-                if char and char.isprintable() and not event.ctrl and not event.alt:
-                    picker.query+=char;picker.active_index=0;return {'RUNNING_MODAL'}
-            if event.type=='LEFTMOUSE' and event.value=='PRESS':
-                key=self._hit_button(x,y)
-                if key and key.startswith('RP:'):
-                    self._apply_workspace_button(key,context)
-                else:picker.close_dropdown()
-                return {'RUNNING_MODAL'}
-            return None
-        rect=self._dock_rectangle
-        if rect is None or not _rect_hit(x,y,rect):
-            if event.type=='LEFTMOUSE' and event.value=='PRESS':
-                handle=self._hit_handle(x,y)
-            return None
-        if event.type in {'WHEELUPMOUSE','WHEELDOWNMOUSE'} and event.value=='PRESS':
-            # Scrolling the inspector must never zoom the underlying geometry.
-            # But rows only change if there are actually hidden rows.
-            bounds=self._dock_list_bounds
-            if (bounds is not None and _rect_hit(x,y,bounds) and self._dock_scroll_max>0):
-                delta=-2 if event.type=='WHEELUPMOUSE' else 2
-                self._dock_scroll=max(0,min(self._dock_scroll_max,self._dock_scroll+delta))
-            return {'RUNNING_MODAL'}
-        if event.type=='LEFTMOUSE' and event.value=='PRESS':
-            key=self._hit_button(x,y)
-            if key:self._execute_studio_dock_button(key,context)
-            return {'RUNNING_MODAL'}
-        # Never let clicking empty inspector space select hidden geometry.
-        if event.type in {'LEFTMOUSE','RIGHTMOUSE'}:return {'RUNNING_MODAL'}
-        return None
 
-    def _execute_studio_dock_button(self,key,context):
-        if key=='DOCK:COLLAPSE':self._dock_collapsed=True;return
-        if key=='DOCK:EXPAND':self._dock_collapsed=False;return
-        if key=='DOCK:PRESETS':
-            bpy.ops.uvwall.dock_presets('INVOKE_DEFAULT');return
-        if key.startswith('DOCK:SECTION:'):
-            prefs=get_preferences(context)
-            if prefs is not None:
-                mode=definition_for(self._path()).generator_type
-                content=read_map(getattr(prefs,'dock_sections_json','{}'))
-                values=set(safe_strings(content,mode))
-                name=key[len('DOCK:SECTION:'):]
-                if name in values:values.remove(name)
-                else:values.add(name)
-                content[mode]=sorted(values)
-                prefs.dock_sections_json=write_map(content)
-                self._dock_scroll=0;self._dock_drawn_region_size=None
-            return
-        if key.startswith('DOCK:FAVORITE:'):
-            prefs=get_preferences(context)
-            if prefs is not None:
-                mode=definition_for(self._path()).generator_type
-                valid={k for k,_ in dock_row_visibility(mode,definition_for(self._path()),path_closed=self._is_closed_path()) if k!='SECTION'}
-                field=key[len('DOCK:FAVORITE:'):]
-                if field in valid:
-                    content=read_map(getattr(prefs,'dock_favorites_json','{}'))
-                    values=list(safe_strings(content,mode,valid))
-                    if field in values:values.remove(field)
-                    else:values.append(field)
-                    content[mode]=values[:48]
-                    prefs.dock_favorites_json=write_map(content)
-                    self._dock_scroll=0;self._dock_drawn_region_size=None
-            return
-        if key.startswith('DOCK:MODE:'):
-            target=key.rsplit(':',1)[1]
-            try:bpy.ops.uvwall.studio_set_mode('EXEC_DEFAULT',mode=target)
-            except (RuntimeError,ValueError) as exc:self._toast(str(exc),'ERROR')
-            self._dock_scroll=0
-            return
-        if key=='DOCK:COLOR':
-            bpy.ops.uvwall.hover_palette('INVOKE_DEFAULT');return
-        if key=='DOCK:BUILD':
-            self._apply_workspace_button('BUILD',context);return
-        if key=='DOCK:PROBLEMS':
-            self._apply_workspace_button('PROBLEMS_REFRESH',context);return
-        if key.startswith('DOCK:TOGGLE:'):
-            bpy.ops.uvwall.dock_switch('EXEC_DEFAULT',field=key.split(':',2)[2]);return
-        if key.startswith('DOCK:EDIT:'):
-            field=key.split(':',2)[2]
-            if field in {'module_standard','wall_alignment','roof_normal','story_direction','inset_side','surface_method','cornice_uv_mode'}:
-                bpy.ops.uvwall.dock_switch('EXEC_DEFAULT',field=field)
-            else:bpy.ops.uvwall.dock_field('INVOKE_DEFAULT',field=field)
-            return
-        if key.startswith('DOCK:RESOURCE:'):
-            bpy.ops.uvwall.dock_resource('INVOKE_DEFAULT',field=key.split(':',2)[2]);return
-        if key.startswith('RP:'):
-            self._apply_workspace_button(key,context)
 
     def _draw_toast(self,region):
         if not self._toast_text or perf_counter()>self._toast_until:return
@@ -3726,10 +3575,16 @@ class UVWALL_OT_viewport_inspector(Operator):
         placed=manager.place('TOAST',(width,38.),(x,y))
         if placed is None:return
         x,y=placed[0],placed[1]
-        colors={'SUCCESS':(.22,.82,.63,1),'WARNING':(.98,.67,.24,1),'ERROR':(1.,.27,.22,1),'INFO':(.40,.72,.83,1)}
+        theme=_iss_theme.from_preferences(get_preferences())
+        chrome=_viewport_skin.shell(theme)
+        # Error/warning/success carry real semantic meaning. INFO is neutral
+        # chrome and must follow user accent instead of a fixed cyan.
+        colors={'SUCCESS':(.22,.82,.63,1),'WARNING':(.98,.67,.24,1),
+                'ERROR':(1.,.27,.22,1),'INFO':(*theme.accent,.95)}
         border=colors.get(self._toast_level,colors['INFO'])
-        _draw_rect(x,y,x+width,y+38,(.018,.028,.033,.96),border)
-        _text(x+width*.5,y+13,_short_label(self._toast_text,width-24,10),10,(.94,.98,.97,1),'CENTER')
+        _draw_rect(x,y,x+width,y+38,chrome['panel'],border)
+        _text(x+width*.5,y+13,_short_label(self._toast_text,width-24,10),
+              10,_viewport_skin.ink(theme),'CENTER')
 
     def _draw_display_controls(self,context,region):
         """Only functional per-tool toggles; the theme is global ISSMAKER.
@@ -4073,7 +3928,8 @@ class UVWALL_OT_viewport_inspector(Operator):
                 from ..production.wall_alignment import automatic_inset_side
                 d.inset_side=automatic_inset_side(d.wall_alignment,d.inset_side)
             self._smart_segment_key=None;self._spatial_previous.clear()
-        elif key=="W_TOP":d.create_top_cap=not d.create_top_cap
+        elif key=="W_TOP":
+            d.create_top_cap,d.create_bottom_cap=toggled_master_caps(d.create_top_cap,d.create_bottom_cap)
         elif key=="W_DIR":
             d.story_direction="UP" if d.story_direction=="DOWN" else "DOWN"
             self._smart_segment_key=None;self._spatial_previous.clear()
@@ -4583,7 +4439,7 @@ class UVWALL_OT_viewport_inspector(Operator):
 
     def modal(self, context, event):
         # Global ISSMAKER tool-lifecycle contract: one Esc exits this tool,
-        # even if Studio Dock, a resource dropdown or a drag owns the input.
+        # even when a resource dropdown or a drag owns the input.
         if event.type == 'ESC' and event.value == 'PRESS':
             if getattr(self,'_clean_preview',False):
                 self._clean_preview=False;self._clean_button=None
@@ -4629,22 +4485,6 @@ class UVWALL_OT_viewport_inspector(Operator):
                 self._finish(context)
                 return {'FINISHED'}
             return {'RUNNING_MODAL'}
-        new_mode=active_ui_mode(context)
-        if new_mode != getattr(self, "_ui_mode", "FLOATING_PRO"):
-            if self._drag_kind is not None:
-                self._restore_drag()
-            self._ui_mode=new_mode
-            self._hover=None; self._radial=False; self._numeric=False
-            self._buttons=[]; self._handles=[]; self._spatial_rects={}
-            self._hud_rect=None
-            self._workspace_rect=None; self._picker_editor=None
-            self._dock_rectangle=None
-            self._dock_drawn_region_size=None;self._dock_list_bounds=None;self._dock_scroll_max=0
-            if self._resource_picker is not None:
-                self._resource_picker.close_dropdown()
-                self._resource_picker.cancel_viewport()
-            if context.area is not None:context.area.tag_redraw()
-            # Floater drafts persist in EditorStack until returning to Floating.
         # Keep the modal session and its windows, but suspend ALL source-Mesh
         # reads while Blender is in Edit Mode. An active BMesh is not a safe
         # substitute for the object-mode geometry; build remains prohibited.
@@ -4703,23 +4543,6 @@ class UVWALL_OT_viewport_inspector(Operator):
             if event.type=='TIMER':
                 return {'PASS_THROUGH'}
             return {'PASS_THROUGH'}
-
-        if new_mode == "STUDIO_DOCK":
-            if inside and region is not None:
-                outcome=self._handle_studio_dock_event(context,event,x,y,region)
-                if outcome is not None:return outcome
-            if event.type=="TIMER":
-                try:
-                    pointers={area.as_pointer() for area in context.window.screen.areas}
-                    if self._area_ptr not in pointers or context.window.workspace != self._workspace_ref:
-                        self._finish(context)
-                        return {"FINISHED"}
-                    self._sync_follow_selection(context)
-                    self._engine.update()
-                except (AttributeError,ReferenceError,RuntimeError):
-                    self._finish(context)
-                    return {"FINISHED"}
-            return {"PASS_THROUGH"}
 
         # While the workspace is active Ctrl+Z belongs to UV Wall's atomic
         # edit history. Passing it to Blender undoes the long-running modal
@@ -5198,7 +5021,7 @@ class UVWALL_OT_viewport_inspector(Operator):
                 parent,part=key.rsplit(':',1)
                 d=self._definition()
                 action=_universal.marker_action(parent,part,double=bool(d.create_inner),
-                          top_cap=bool(d.create_top_cap),plant=bool(d.create_inner_surface))
+                          top_cap=cap_master_enabled(d.create_top_cap,d.create_bottom_cap),plant=bool(d.create_inner_surface))
                 if action is None:return {'RUNNING_MODAL'}
                 toggles={'TOGGLE_CAP':'W_TOP','TOGGLE_PLANT':'W_PLANT',
                          'TOGGLE_CORNICE_SIDE':'C_FLIP','TOGGLE_SURFACE_DIRECTION':'S_NORMAL'}

@@ -1,4 +1,4 @@
-"""One real GPU-component renderer shared by DWOS and UV Wall.
+"""One real GPU-component renderer shared by shared tool and UV Wall.
 
 The math layer is importable without Blender. GPU resources are created lazily
 inside draw calls. Caller retains ownership of hitboxes and semantic actions.
@@ -25,7 +25,7 @@ def fill_rect(x0,y0,x1,y1,color,radius=7.,steps=5):
     try:
         import gpu
         from gpu_extras.batch import batch_for_shader
-        from issmaker_modeling_assistant import hud_gpu_runtime
+        from .. import hud_gpu_runtime
         shared=hud_gpu_runtime.cache()
         sh=(shared.shader if shared else None) or gpu.shader.from_builtin('UNIFORM_COLOR')
         if shared is not None:shared.shader=sh
@@ -49,16 +49,16 @@ def outline_rect(x0,y0,x1,y1,color,radius=7.,width=1.,steps=5):
     pts=rounded_outline(x0+1.8,y0+1.8,x1-x0-3.6,y1-y0-3.6,max(.0,radius-1.8),steps)
     if not pts:return False
     try:
-        from issmaker_modeling_assistant.hud_chrome_gpu import draw_aa_border
+        from ..hud_chrome_gpu import draw_aa_border
         return bool(draw_aa_border(pts,color,(x0,y0,x1-x0,y1-y0),width=width,closed=True))
     except (ImportError,RuntimeError,ValueError,TypeError,AttributeError):return False
 
 
 def shell_background(theme,rect):
-    """Studia/ DWOS panel material in matching physical pixels (decorative)."""
+    """Studia/ shared tool panel material in matching physical pixels (decorative)."""
     if theme is None:return False
     try:
-        from issmaker_modeling_assistant.appearance_gpu import draw_shared_background
+        from ..appearance_gpu import draw_shared_background
         x0,y0,x1,y1=rect
         draw_shared_background(theme,(x0,y0,x1-x0,y1-y0))
         return True

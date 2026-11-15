@@ -14,17 +14,9 @@ INVARIANTS=(
 )
 
 ADAPTERS={
-    'BRICK_HOLE':{
-        'shared_predicates':True,'shared_decision_taxonomy':True,
-        'coverage':'robust segment predicates, area vector, failure classification',
-    },
     'COLLISION_INSPECTOR':{
         'shared_predicates':True,'shared_decision_taxonomy':True,
         'coverage':'shared-edge proof, exact segment/triangle crossing, exact coplanar positive-area overlap',
-    },
-    'DWOS':{
-        'shared_predicates':True,'shared_decision_taxonomy':True,
-        'coverage':'window scalar validation and spatial safety; Smart Interior inherits spatial kernel',
     },
     'UV_WALL':{
         'shared_predicates':True,'shared_decision_taxonomy':True,
@@ -33,10 +25,6 @@ ADAPTERS={
     'CORNICE':{
         'shared_predicates':True,'shared_decision_taxonomy':True,
         'coverage':'inherits UV Wall planar/cap integrity; reach heuristic remains advisory',
-    },
-    'SMART_INTERIOR':{
-        'shared_predicates':True,'shared_decision_taxonomy':True,
-        'coverage':'inherits DWOS spatial safety hard-contact kernel',
     },
 }
 

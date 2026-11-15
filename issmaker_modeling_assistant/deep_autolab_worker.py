@@ -311,44 +311,8 @@ def heavy_wall_cases(source):
              lambda n=n:wall_build(f'WALL_STRESS_{n}',path_of(n),source)[0],
              parameters={'count':n,'seed':SEED,'generator':'3D sinusoid'})
 
-def dwos_case():
-    # A 4x4 planar grid with an intentional missing interior cell.
-    from issmaker_modeling_assistant.tools.dwos_windows.native.opening_detection import detect_openings
-    coords=[(float(i),0.0,float(j)) for j in range(4) for i in range(4)]
-    faces=[]
-    for y in range(3):
-        for x in range(3):
-            if (x,y)==(1,1): continue
-            a=y*4+x;faces.append((a,a+1,a+5,a+4))
-    obj=mesh_object('DWOS_OPENING_GRID',coords,faces=faces)
-    r1=detect_openings(obj)
-    r2=detect_openings(obj)
-    if not isinstance(r1,(tuple,list)) or len(r1)<1:
-        raise AssertionError('No opening candidate for synthetic polygon-hole fixture')
-    if len(r1)!=len(r2):
-        raise AssertionError('DWOS cached detection unstable on unchanged geometry')
-    return {'candidates_first':len(r1),'candidates_second':len(r2),
-            'source_faces':len(faces),'fixture':fingerprint(obj)}
 
 
-def collision_case():
-    from issmaker_modeling_assistant.tools.dwos_windows.native.scene_spatial_safety import scan_scene
-    def cube(name,center):
-        x,y,z=center;r=.75
-        vs=[(x+a*r,y+b*r,z+c*r) for a,b,c in (
-            (-1,-1,-1),(1,-1,-1),(1,1,-1),(-1,1,-1),
-            (-1,-1,1),(1,-1,1),(1,1,1),(-1,1,1))]
-        fs=[(0,3,2,1),(4,5,6,7),(0,1,5,4),(1,2,6,5),(2,3,7,6),(3,0,4,7)]
-        o=mesh_object(name,vs,faces=fs);o['DWOS_role']='INTERIOR';return o
-    a=cube('DWOS_INTERIOR_A',(10,0,0));b=cube('DWOS_INTERIOR_B',(10.6,.3,0))
-    try:
-        hits=scan_scene(bpy.context.scene)
-        matching=[x for x in hits if x.get('type')=='INTERIOR_INTERIOR_COLLISION']
-        if not matching: raise AssertionError('Missed physically overlapping interior boxes')
-        return {'collision_rows':len(matching),'first_witness':matching[0],
-                'a':fingerprint(a),'b':fingerprint(b)}
-    finally:
-        a['DWOS_role']='TEST_DONE';b['DWOS_role']='TEST_DONE'
 
 
 def reliability():
@@ -358,7 +322,7 @@ def reliability():
         raise AssertionError('Cross-tool Reliability Lab failed '+repr(result.get('rows'))[:800])
     sup.atomic_json(ROOT / 'fixtures' / 'reliability_lab.json',result)
     return {'passed':result['passed'],'total':result['total'],
-            'actual_tools':['Brick Hole','Collision','DWOS','UV Wall']}
+            'actual_tools':['Collision','UV Wall']}
 
 
 def run():
@@ -373,7 +337,6 @@ def run():
         'native_background':'RUNNING',
         'native_gui':'NOT_TESTED_GUI', 'real_user_scene':'NOT_TESTED',
         'gui_undo_redo':'NOT_TESTED_GUI',
-        'dwos_corner_window_build':'NOT_TESTED',
         'cornice_profile_editor':'NOT_TESTED',
         'notes':'Worker uses Blender bpy and production Wall builder. No fake Blender API.'})
     sup.atomic_json(ROOT/'environment.json',{
@@ -408,8 +371,6 @@ def run():
         case('CORNICE_SHARP_90_PROFILE','CORNICE','ACCEPT',lambda:cornice_case(source))
         case('WALL_ACCEPTED_TRANSACTION_ROLLBACK','UV_WALL','ROLLBACK',
              lambda:accepted_result_rollback_case(source))
-    case('DWOS_OPENING_ACTUAL_SCANNER','DWOS','>=1_AND_STABLE',dwos_case)
-    case('DWOS_INTERIOR_COLLISION_SCANNER','DWOS','TRUE_OVERLAP',collision_case)
     # Save a re-openable native fixture BEFORE the heaviest production build;
     # if a 1024-point build crashes, earlier evidence remains available.
     case('EXPORT_SYNTHETIC_BLEND_CHECKPOINT','EVIDENCE','SAVED',lambda:save_scene())
@@ -417,7 +378,6 @@ def run():
         heavy_wall_cases(source)
     # Explicit blockers document actual untested domain generation paths.
     for name,tool,reason in (
-        ('DWOS_CORNER_MINUS_90_BUILD','DWOS','Full 3D corner-window Composer requires GUI acceptance'),
         ('GUI_ESC_DPI_CLICK','UI','No actual GUI input in background Blender'),
         ('GUI_UNDO_REDO_STRESS','UNDO','No interactive Undo context in background Blender'),
     ):

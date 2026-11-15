@@ -4,6 +4,7 @@ Safe by design: creates a SEPARATE scene, never alters existing Mesh data,
 never fabricates click events, and never marks manual scenarios PASS itself.
 """
 from __future__ import annotations
+from .extension_compat import addon_key
 
 import ast
 import datetime as _dt
@@ -29,7 +30,7 @@ _ERRORS = []
 _MAX_SHOTS = 80
 _AUTO_JOB = None
 _LAST_AUTO = None
-_AUTO_KEYS = ('UV_WALL_PATH', 'BRICK_FACE', 'DWOS_WALL', 'COLLISION_SHELLS', 'GENERAL_MESH', 'UV_CHECK')
+_AUTO_KEYS = ('UV_WALL_PATH', 'FACE_SAMPLE', 'COLLISION_SHELLS', 'GENERAL_MESH', 'UV_CHECK')
 
 
 def _timestamp():
@@ -47,12 +48,10 @@ def _inventory():
 
 def _fixture_for(name):
     text = str(name).lower()
-    if any(s in text for s in ('uv wall', 'стена', 'карниз', 'поверхност', 'studio dock')):
+    if any(s in text for s in ('uv wall', 'стена', 'карниз', 'поверхност', 'floating pro')):
         return 'UV_WALL_PATH'
-    if any(s in text for s in ('dwos', 'окна', 'импост', 'стекл')):
-        return 'DWOS_WALL'
-    if any(s in text for s in ('brick', 'проём')):
-        return 'BRICK_FACE'
+    if any(s in text for s in ('opening', 'контур')):
+        return 'FACE_SAMPLE'
     if any(s in text for s in ('collision', 'коллиз', 'пересечен')):
         return 'COLLISION_SHELLS'
     if any(s in text for s in ('uv', 'weld', 'сварк')):
@@ -86,23 +85,21 @@ def _build_steps():
                       'instruction':'Оцените визуал на настоящем экране Blender; приложите скриншот и конкретный комментарий, особенно при FAIL.'})
     chaos = [
       ('CHAOS_01','Открыть и закрыть каждое окно несколько раз','GENERAL_MESH'),
-      ('CHAOS_02','Быстрое переключение UV Wall → DWOS → Brick Hole → Collision','GENERAL_MESH'),
-      ('CHAOS_03','Esc при редактировании числового значения','BRICK_FACE'),
+      ('CHAOS_02','Быстрое переключение UV Wall → Collision','GENERAL_MESH'),
+      ('CHAOS_03','Esc при редактировании числового значения','FACE_SAMPLE'),
       ('CHAOS_04','Ctrl+Z / Ctrl+Shift+Z и сохранность активных HUD','UV_WALL_PATH'),
       ('CHAOS_05','Нажатия на край кнопки и за её границами','GENERAL_MESH'),
       ('CHAOS_06','Hover по соседним кнопкам на высокой скорости','GENERAL_MESH'),
-      ('CHAOS_07','Многократное открытие dropdown и клик вне окна','DWOS_WALL'),
+      ('CHAOS_07','Многократное открытие dropdown и клик вне окна','GENERAL_MESH'),
       ('CHAOS_08','Перетаскивание HUD к краям и углам Viewport','UV_WALL_PATH'),
       ('CHAOS_09','Узкий Viewport и разделение рабочей области','GENERAL_MESH'),
       ('CHAOS_10','Изменение масштаба шрифта и окна HUD','GENERAL_MESH'),
       ('CHAOS_11','Переключение цветовых схем и accent','GENERAL_MESH'),
       ('CHAOS_12','Приоритет Hitbox, перекрытие нескольких HUD','GENERAL_MESH'),
-      ('CHAOS_13','Edit/Object: запуск и отмена неподходящего инструмента','BRICK_FACE'),
+      ('CHAOS_13','Edit/Object: запуск и отмена неподходящего инструмента','FACE_SAMPLE'),
       ('CHAOS_14','UV Wall: WALL/SURFACE/CORNICE и закрытие окон','UV_WALL_PATH'),
-      ('CHAOS_15','DWOS: ONE/SEL/SAME/ALL/COPY и скрытые панели','DWOS_WALL'),
       ('CHAOS_16','Collision: переход между проблемами, ESC и переоткрытие','COLLISION_SHELLS'),
-      ('CHAOS_17','Brick Hole: Preview, числовой ввод и Esc','BRICK_FACE'),
-      ('CHAOS_18','Открыть одновременно два окна Blender / изменить рабочую область','GENERAL_MESH'),
+            ('CHAOS_18','Открыть одновременно два окна Blender / изменить рабочую область','GENERAL_MESH'),
     ]
     for code, title, fixture in chaos:
         steps.append({'id': code, 'name': title, 'group': 'INTERACTION', 'fixture': fixture,
@@ -144,18 +141,8 @@ def _fixtures(scene):
     # Edge-only authored route, including nonuniform Z, with exact original vertices.
     created['UV_WALL_PATH'] = _new_mesh(scene, col, 'UV_WALL_PATH',
         [(0,0,0),(4,0,.25),(4,4,1.0),(8,4,.5)], edges=[(0,1),(1,2),(2,3)], location=(-12,0,0))
-    created['BRICK_FACE'] = _new_mesh(scene, col, 'BRICK_FACE',
+    created['FACE_SAMPLE'] = _new_mesh(scene, col, 'FACE_SAMPLE',
         [(-1,0,0),(1,0,0),(1,0,2),(-1,0,2)],faces=[(0,1,2,3)],location=(-4,0,0),uv=True)
-    # This is a visual opening fixture, not a certified DWOS auto-detection fixture.
-    xx=(-2,-.8,.8,2); zz=(0,.8,2.2,3.2)
-    verts=[(x,0,z) for z in zz for x in xx]
-    faces=[]
-    for j in range(3):
-        for i in range(3):
-            if i==1 and j==1:
-                continue
-            faces.append((j*4+i,j*4+i+1,(j+1)*4+i+1,(j+1)*4+i))
-    created['DWOS_WALL'] = _new_mesh(scene,col,'DWOS_WALL',verts,faces=faces,location=(4,0,0),uv=True)
     # Two intersecting independent closed shells in a single Mesh object.
     v1,f1=_cube(0,0,1,.9)
     v2,f2=_cube(.6,.3,1,.9)
@@ -165,8 +152,7 @@ def _fixtures(scene):
     v4,f4=_cube(0,0,1,1)
     created['UV_CHECK'] = _new_mesh(scene,col,'UV_CHECK',v4,faces=f4,location=(7,7,0),uv=True)
     for key,obj in created.items():
-        obj['ima_hud_lab_warning'] = ('UI-only visual fixture, not a validated production case' if key=='DWOS_WALL'
-            else 'Non-destructive independent HUD laboratory fixture')
+        obj['ima_hud_lab_warning'] = 'Non-destructive independent HUD laboratory fixture'
     return created
 
 
@@ -242,7 +228,7 @@ def _metrics(context):
         out['dpi']={'ui_scale':getattr(system,'ui_scale',None),
                     'pixel_size':getattr(system,'pixel_size',None),
                     'dpi':getattr(system,'dpi',None)}
-        addon=context.preferences.addons.get('issmaker_modeling_assistant')
+        addon=context.preferences.addons.get(addon_key())
         pref=addon.preferences if addon else None
         if pref:
             for key in ('ui_scheme','ui_surface','accent','font_scale','window_scale',
@@ -286,20 +272,17 @@ def _auto_checks(context,session):
           and context.scene.get('ima_hud_lab_id')==session['id'],
           'Current scene must be separate from the original scene')
     meshes={key:bpy.data.objects.get(name) for key,name in session['fixture_names'].items()}
-    check('ALL_FIXTURES_PRESENT',len(meshes)==6 and all(obj is not None for obj in meshes.values()),
-          'Six independent test objects should exist')
+    check('ALL_FIXTURES_PRESENT',len(meshes)==5 and all(obj is not None for obj in meshes.values()),
+          'Five independent test objects should exist')
     wall=meshes.get('UV_WALL_PATH')
     check('EDGE_PATH',bool(wall and len(wall.data.vertices)==4
           and len(wall.data.edges)==3 and len(wall.data.polygons)==0),
           'Authored path: four points, three edges, no faces')
-    dwos=meshes.get('DWOS_WALL')
-    check('DWOS_VISUAL_HOLE',bool(dwos and len(dwos.data.polygons)==8),
-          'Eight side quads around a central opening; visual example only')
     collision=meshes.get('COLLISION_SHELLS')
     check('COLLISION_TWO_SHELLS',bool(collision and len(collision.data.vertices)==16
           and len(collision.data.polygons)==12),
           'Two closed eight-vertex cube shells combined into one object')
-    for key in ('BRICK_FACE','DWOS_WALL','GENERAL_MESH','UV_CHECK'):
+    for key in ('FACE_SAMPLE','GENERAL_MESH','UV_CHECK'):
         obj=meshes.get(key)
         check('UV_'+key,bool(obj and len(obj.data.uv_layers)>0),
               'UV layer exists; this does not prove texel density or correctness')
@@ -409,10 +392,8 @@ def _prepare_lab_handoff(context):
 
     def owners():
         return {
-            'BRICK_HOLE': bool(active_tools._brick_active()),
-            'COLLISION': bool(active_tools._collision_active(context)),
+                        'COLLISION': bool(active_tools._collision_active(context)),
             'UV_WALL': bool(active_tools._wall_active(context)),
-            'DWOS': bool(active_tools._dwos_active()),
         }
 
     try:
@@ -750,7 +731,7 @@ def _auto_probe(context, session):
                 'No fake GUI mouse clicks or fake Hover/Undo/Redo PASS',
                 'Only current Blender window resolution is observed: 1K/2K/4K are not changed on the operating system',
                 'Six fixture screenshots do not prove 27 tool HUDs were opened or visually approved',
-                'No production UV Wall, DWOS, Brick Hole or Collision operations are executed',
+                'No production UV Wall or Collision operations are executed',
             ]}
     for row in _auto_checks(context,session):
         _auto_record(report,row['id'],row['status'],row['detail'],domain='FIXTURE')

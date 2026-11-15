@@ -46,6 +46,8 @@ class RenderCache:
         self.chrome=OrderedDict()
         self.smooth_shader=None
         self.aa_error=None
+        self.material_error=None
+        self.material_shader=None
         self.shader=None
         self.max_boxes=max(32,int(max_boxes))
         self.max_patterns=max(16,int(max_patterns))
@@ -70,6 +72,8 @@ class RenderCache:
         self.chrome.clear()
         self.smooth_shader=None
         self.aa_error=None
+        self.material_error=None
+        self.material_shader=None
         self.shader=None
 
 
@@ -86,6 +90,7 @@ class Painter:
         if cache is not None:cache.shader=self.shader
         gpu.state.blend_set('ALPHA')
         self.font=0
+        self.font_scale=1.0
         self.opacity=1.0
     def close(self):
         self.gpu.state.blend_set(self._previous_blend)
@@ -124,7 +129,7 @@ class Painter:
     def text(self,txt,x,y,size=12,color=(.9,.96,.95,1),width=None,align='left'):
         import blf
         txt=str(txt)
-        blf.size(self.font,max(8,int(size)))
+        blf.size(self.font,max(8,int(round(size*self.font_scale))))
         if width is not None:
             txt=hud_readability.fit_caption(txt,width,
                 lambda sample:blf.dimensions(self.font,sample)[0])
@@ -135,14 +140,22 @@ class Painter:
         blf.position(self.font,hud_readability.snap(x),hud_readability.snap(y),0)
         blf.color(self.font,*self._paint_color(color))
         blf.draw(self.font,txt)
+    def material(self,theme,x,y,w,h,phase=0.,preview=False):
+        """Animate UI-only GPU material behind labels; never change hitboxes."""
+        from . import gpu_style_material
+        self.gpu.state.blend_set('ALPHA')
+        return gpu_style_material.render(theme,(x,y,w,h),
+            now=phase,preview=preview,cache=self.cache,
+            opacity_multiplier=self.opacity)
+
     @staticmethod
     def _pattern_tint(theme,preview):
-        # Panels preserve user hue, but decoration never reaches bright UI glyph
-        # saturation. Mixing against muted architectural mineral tint also
-        # keeps neon accents useful for ACTIVE / ERROR semantic states.
-        base=(.20,.38,.35)
-        primary=tuple(base[i]*.70+theme.accent[i]*.30 for i in range(3))
-        secondary=tuple(base[i]*.78+theme.secondary[i]*.22 for i in range(3))
+        # Patterns follow the currently selected accent and secondary tint.
+        # Diagnostic geometry/markers keep their own semantic colors.
+        # The current user's accent and secondary colors are the only
+        # decorative tints, including hover/previews. No hard-coded teal.
+        primary=tuple(theme.panel[i]*.38+theme.accent[i]*.62 for i in range(3))
+        secondary=tuple(theme.panel[i]*.46+theme.secondary[i]*.54 for i in range(3))
         return primary,secondary
 
     def _pattern_smooth(self,pattern,x,y,w,h,theme,phase,preview,sc,policy):
@@ -187,8 +200,11 @@ class Painter:
                     rgba=[(rgb[0],rgb[1],rgb[2],rgba[3]*opacity) for rgba in coverage]
                     batches.append(self.batcher(shader,'TRIS',{'pos':geom,'color':rgba}))
                 return tuple(batches)
+            # A stationary material grain is reused irrespective of whether
+            # it appears in a card or the hero. GPU shader animation below
+            # provides movement; don't rebuild a 1000-segment CPU mesh per tick.
             use_cache=(self.cache is not None and self.opacity>.999 and
-                       (preview and abs(phase)<1e-8 or getattr(self,'_shared_cache',False)))
+                       (abs(phase)<1e-8 or getattr(self,'_shared_cache',False)))
             if use_cache:
                 # Live HUDs are quantized independently from input/hover: the
                 # same decorative phase reused on multiple 60Hz draw callbacks.
@@ -224,7 +240,7 @@ class Painter:
             return tuple(self.batcher(self.shader,'LINES',{'pos':pts}) if pts else None for pts in bins)
         # Only thumbnails (fixed phase 0) retain GPU batches; streaming hero
         # data stays live, preventing cache churn while the animation moves.
-        if self.cache is not None and preview and phase==0.:
+        if self.cache is not None and phase==0.:
             key=(pattern,round(x,3),round(y,3),round(w,3),round(h,3),round(sc,4),round(theme.pattern_density,2))
             bins=self.cache.fetch(self.cache.patterns,key,pattern_batches,self.cache.max_patterns)
         else:
@@ -247,7 +263,7 @@ class Painter:
 
 
 def draw_shared_background(theme, xywh, *, strength_factor=.48):
-    """Decorative background for existing DWOS, Wall, Brick Hole, Collision HUDs.
+    """Decorative background for existing shared tool, Wall and Collision HUDs.
 
     It draws no independent clickable surfaces. All interaction belongs to the
     original HUD and unchanged rectangle/hit-test code.
@@ -267,7 +283,9 @@ def draw_shared_background(theme, xywh, *, strength_factor=.48):
     p=Painter(cache=hud_gpu_runtime.cache())
     p._shared_cache=True
     try:
-        p.pattern(theme.pattern,x+6,y+6,w-12,h-12,dim,phase,preview=False)
+        material_ok=p.material(theme,x+6,y+6,w-12,h-12,time.monotonic())
+        p.pattern(theme.pattern,x+6,y+6,w-12,h-12,dim,
+                  0. if material_ok else phase,preview=False)
         # Noninteractive subtle edge light. Never expands panel/hit rectangles.
         if theme.motion!='OFF':
             from math import sin

@@ -42,7 +42,7 @@ try:
             "production.inner_height", "production.secondary_points", "production.wall_seams", "production.wall_topology", "production.wall_uv_field", "production.vertex_minimal", "production.topology_first", "production.cap_boundary_plan", "production.corner_audit", "production.rotation", "production.dependent_surface", "production.wall_alignment", "production.surface_coverage", "production.cap_grid", "production.vertical_uv",
             "operators.assignment", "operators.build_context", "operators.build", "operators.diagnostics", "operators.problems",
             "operators.learning", "operators.revisions", "core.revisions", "operators.mesh_recovery", "core.mesh_recovery", "operators.numeric", "operators.context_editor", "operators.segment_joint_preview", "production.segment_joint_graph", "production.true_corner_trim",
-            "ui.settings", "ui.panel", "ui.preferences", "ui.studio_dock", "ui.dock_workspace_state", "viewport.studio_dock_layout", "viewport.controller", "viewport.tool_eligibility",
+            "ui.settings", "ui.panel", "ui.preferences", "ui.viewport_actions", "viewport.controller", "viewport.tool_eligibility",
         ):
             _module = sys.modules.get(f"{__package__}.{_suffix}")
             if _module:
@@ -58,12 +58,12 @@ try:
     from .core import undo_handlers as _undo_handlers
     from .viewport import controller as _viewport_controller
     from .ui import preferences as _ui_preferences
-    from .ui import studio_dock as _studio_dock
+    from .ui import viewport_actions as _viewport_actions
     # Runtime source guard runs in register(), so every guarded module must
     # already be imported. Pass 50 accidentally omitted this pure-Python module.
     from .production import secondary_points as _secondary_points
     from .production import validation, path, wall_surface, surface, wall, cornice, inner_height, topology_first, cap_boundary_plan
-    from .operators import assignment, build, diagnostics, problems, revisions, mesh_recovery, learning, numeric, context_editor, segment_joint_preview
+    from .operators import assignment, build, diagnostics, problems, revisions, mesh_recovery, learning, numeric, context_editor, segment_joint_preview, material_builder
     from .ui import settings, panel
     _MODULES = (validation, path, wall_surface, surface, wall, cornice,
                 assignment, build, diagnostics, problems, learning, settings, panel)
@@ -83,15 +83,8 @@ try:
     _UVWALL_BOOT_STAGE = "class_manifest"
     classes = (
         _ui_preferences.UVWALL_AddonPreferences,
-        _studio_dock.UVWALL_OT_studio_set_mode,
-        _studio_dock.UVWALL_OT_studio_build,
-        _studio_dock.UVWALL_OT_hover_palette,
-        _studio_dock.UVWALL_OT_inner_height_point,
-        _studio_dock.UVWALL_OT_dock_field,
-        _studio_dock.UVWALL_OT_dock_switch,
-        _studio_dock.UVWALL_OT_dock_resource,
-        _studio_dock.UVWALL_OT_dock_resource_action,
-        _studio_dock.UVWALL_OT_dock_presets,
+        _viewport_actions.UVWALL_OT_hover_palette,
+        _viewport_actions.UVWALL_OT_inner_height_point,
         settings.UVWALL_PG_corner_marker,
         settings.UVWALL_PG_problem,
         settings.UVWALL_PG_settings,
@@ -103,6 +96,7 @@ try:
         assignment.OBJECT_OT_uv_wall_add_cornice_corners,
         assignment.OBJECT_OT_uv_wall_mark_cornice_smooth,
         assignment.OBJECT_OT_uv_wall_use_active_material,
+        material_builder.OBJECT_OT_uv_wall_create_material,
         assignment.OBJECT_OT_uv_wall_use_material_image,
         assignment.OBJECT_OT_uv_wall_remove_cornice_corner,
         assignment.OBJECT_OT_uv_wall_clear_cornice_corners,

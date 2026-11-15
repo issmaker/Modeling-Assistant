@@ -1,6 +1,6 @@
 """Wave 8 read-only consolidated Navigator: no Mesh edits, no modal ownership.
 
-Existing UV, Collision, Brick and DWOS inspectors remain authoritative.
+Existing UV, Collision and shared tool inspectors remain authoritative.
 This adapter publishes bounded numeric snapshots only on explicit refresh.
 """
 import bpy
@@ -233,24 +233,8 @@ def _source_ledger():
                'coordinates': witness.get('coordinates', ()) if verified_world else ()}
 
 
-def _source_brick():
-    from .tools.brick_hole import issue_inspector
-    for index, row in enumerate(issue_inspector.issues()[:core.MAX_ISSUES]):
-        point = row.get('point')
-        yield {'kind': 'REVIEW', 'code': 'BRICK_CONTOUR_CONTACT',
-               'entity': 'brick_%d' % index,
-               'message': row.get('reason', 'Проверьте контур'),
-               'coordinates': (point,) if point is not None else ()}
 
 
-def _source_seams():
-    from .tools.brick_hole import seam_inspector
-    for row in seam_inspector.issues()[:core.MAX_ISSUES]:
-        yield {'kind': 'WARNING' if row.get('severity') == 'ERROR' else 'REVIEW',
-               'code': row.get('reason_code', 'UV_SEAM'),
-               'entity': '%s/edge:%s' % (row.get('source_object', ''), row.get('edge_index', -1)),
-               'message': 'UV-разрыв: проверить (изображение не анализировалось)',
-               'coordinates': (row.get('a'), row.get('b'))}
 
 
 def _source_collision(context):
@@ -272,8 +256,6 @@ def _snapshot_sources(context):
     sources, errors, truncated = [], {}, {}
     for name, producer in (
         ('RELIABILITY', _source_ledger),
-        ('BRICK_HOLE', _source_brick),
-        ('UV_SEAMS', _source_seams),
         ('COLLISION', lambda: _source_collision(context)),
     ):
         try:
@@ -282,11 +264,6 @@ def _snapshot_sources(context):
             if name == 'COLLISION':
                 settings = getattr(getattr(context, 'scene', None), 'collision_inspector', None)
                 n = len(settings.events) if settings is not None else 0
-                if n > len(payload):
-                    truncated[name] = n - len(payload)
-            elif name == 'UV_SEAMS':
-                from .tools.brick_hole import seam_inspector
-                n = len(seam_inspector.issues())
                 if n > len(payload):
                     truncated[name] = n - len(payload)
         except Exception as exc:
@@ -1183,7 +1160,6 @@ def register():
         bpy.types.WindowManager.ima_unified_issue_source = bpy.props.EnumProperty(
             name='Источник', items=(
                 ('ALL', 'Все', ''), ('RELIABILITY', 'Reliability', ''),
-                ('BRICK_HOLE', 'Brick Hole', ''), ('UV_SEAMS', 'UV Seam', ''),
                 ('COLLISION', 'Collision', '')),
             default='ALL', update=_on_filter_changed)
         bpy.types.WindowManager.ima_unified_issue_hud_position = bpy.props.EnumProperty(

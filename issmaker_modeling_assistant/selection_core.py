@@ -8,21 +8,68 @@ import hashlib
 import struct
 
 
-def selected_uv_faces(bm, uv_layer, select_mode):
-    """Return wholly UV-selected, visible faces and partial-face count.
+def uv_selection_supported(loop, uv_layer):
+    """Blender 5.0+ uses BMLoop/BMFace UV attributes; 4.x uses BMLoopUV."""
+    return (hasattr(loop, 'uv_select_vert') or
+            hasattr(loop[uv_layer], 'select'))
 
-    Mesh selection is intentionally NOT tested here: unsynced UV selection is
-    authoritative even when a different polygon set is selected in 3D.
+
+def uv_flags(loop, uv_layer):
+    """Read actual UV selection, never fall back to broader mesh selection."""
+    if hasattr(loop, 'uv_select_vert'):
+        return bool(loop.uv_select_vert), bool(loop.uv_select_edge)
+    uv = loop[uv_layer]
+    if not hasattr(uv, 'select'):
+        raise RuntimeError('UV selection attributes unavailable in this Blender build')
+    return bool(uv.select), bool(getattr(uv, 'select_edge', False))
+
+
+def set_uv_flags(loop, uv_layer, selected, edge_selected):
+    """Set UV flags across 4.x/5.x without changing underlying 3D selection."""
+    if hasattr(loop, 'uv_select_vert_set'):
+        loop.uv_select_vert_set(bool(selected))
+        loop.uv_select_edge_set(bool(edge_selected))
+        return
+    uv = loop[uv_layer]
+    uv.select = bool(selected)
+    if hasattr(uv, 'select_edge'):
+        uv.select_edge = bool(edge_selected)
+
+
+def uv_face_flag(face, uv_layer):
+    if hasattr(face, 'uv_select'):
+        return bool(face.uv_select)
+    return all(uv_flags(loop, uv_layer)[0] for loop in face.loops)
+
+
+def set_uv_face_flag(face, uv_layer, value):
+    if hasattr(face, 'uv_select_set'):
+        face.uv_select_set(bool(value))
+    else:
+        for loop in face.loops:
+            set_uv_flags(loop, uv_layer, bool(value), bool(value))
+
+
+def selected_uv_faces(bm, uv_layer, select_mode):
+    """Use actual UV editor face/corner selection, not selected Mesh faces.
+
+    Blender 5.0 removed BMLoopUV.select and moved UV selection to BMLoop
+    and BMFace. A fallback to loop.vert.select could modify every island when
+    the full mesh is selected in 3D; it is deliberately forbidden here.
     """
     faces = []
     partial = 0
-    edge_mode = select_mode == 'EDGE'
+    mode = str(select_mode).upper()
     for face in bm.faces:
         if face.hide:
             continue
-        flags = [bool(getattr(loop[uv_layer], 'select_edge', False))
-                 if edge_mode else bool(loop[uv_layer].select)
-                 for loop in face.loops]
+        if mode == 'FACE':
+            selected = uv_face_flag(face, uv_layer)
+            if selected:
+                faces.append(face)
+            continue
+        channel = 1 if mode == 'EDGE' else 0
+        flags = [uv_flags(loop, uv_layer)[channel] for loop in face.loops]
         if flags and all(flags):
             faces.append(face)
         elif any(flags):
@@ -31,12 +78,7 @@ def selected_uv_faces(bm, uv_layer, select_mode):
 
 
 def selection_fingerprint(bm, uv_layer, mesh_select_mode, uv_select_mode, sync):
-    """Digest ALL mesh and UV selection flags, mode, active face.
-
-    This is deliberately not a face-only fingerprint: vertex/edge/UV edits
-    performed by the user during issue preview must never be overwritten when
-    leaving the tool. Excludes mutable selection history (advisory to Blender).
-    """
+    """Digest actual mesh/UV selection and modes, independent of UV map."""
     digest = hashlib.blake2b(digest_size=32)
     digest.update(bytes((int(bool(x)) for x in mesh_select_mode)))
     digest.update(str(uv_select_mode).encode('ascii', errors='replace'))
@@ -48,12 +90,11 @@ def selection_fingerprint(bm, uv_layer, mesh_select_mode, uv_select_mode, sync):
         digest.update(bytes(int(element.select) for element in domain))
     if uv_layer is not None:
         for face in bm.faces:
-            digest.update(bytes(
-                (int(bool(loop[uv_layer].select)) |
-                 (int(bool(getattr(loop[uv_layer], 'select_edge', False))) << 1))
-                for loop in face.loops))
+            digest.update(bytes([int(uv_face_flag(face, uv_layer))]))
+            for loop in face.loops:
+                v,e=uv_flags(loop, uv_layer)
+                digest.update(bytes((int(v) | (int(e)<<1),)))
     return digest.digest()
-
 
 def uv_and_mesh_fingerprint(bm, uv_layer, settings):
     return selection_fingerprint(

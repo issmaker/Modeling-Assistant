@@ -1,6 +1,6 @@
 """Generation-time, opt-in, Blender-independent UV staging.
 
-DWOS creates frame/glass/interior surfaces without UV data in the 1.8.8.47
+Generated frame/glass/interior surfaces without UV data in the 1.8.8.47
 baseline. This module provides a conservative metric, positive-winding UV
 projection for **whole** eligible meshes. It deliberately refuses any partial
 UV map, oversized face, non-planar face or degenerate geometry. Face islands
@@ -9,7 +9,7 @@ No geometry, face order or materials are modified here.
 """
 from math import isfinite, sqrt
 
-UV_SCHEMA = 'DWOS_FACE_LOCAL_1000_PX_M_V1'
+UV_SCHEMA = 'ISSMAKER_FACE_LOCAL_1000_PX_M_V1'
 
 
 def _sub(a, b):

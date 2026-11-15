@@ -1,4 +1,5 @@
 """Small shared viewport panels: one measured rectangle for drawing and input."""
+from .extension_compat import addon_key
 import math
 import bpy
 from bpy.types import Operator
@@ -203,12 +204,17 @@ class StyledPanel:
         x=max(8.,min(x,region.width-w-8));y=max(8.,min(y,region.height-h-8))
         self._rect=(x,y,w,h)
         window_visibility.observe(self._scope,self._key,(x,y,x+w,y+h))
-        prefs=context.preferences.addons.get('issmaker_modeling_assistant')
+        prefs=context.preferences.addons.get(addon_key())
         self._theme=theme_engine.from_preferences(prefs.preferences if prefs else None)
         t=self._theme;p=Painter(cache=self._cache);self._hits=[]
         try:
             chrome=_viewport_skin.shell(t)
             p.box(x,y,w,h,chrome['panel'],chrome['border'],rad=_viewport_skin.CORNER_PX['panel'])
+            # Paint-only animated material under labels, buttons and inputs.
+            # The original modal hitboxes and measured panel bounds are intact.
+            import time
+            p.material(t,x+8,y+9,w-16,max(20.,h-69),
+                       time.monotonic())
             p.box(x+5,y+h-54,w-10,48,chrome['header'],rad=_viewport_skin.CORNER_PX['panel'])
             p.text(self.title,x+19,y+h-34,14,chrome['title'],width=w-76)
             self._button(p,(x+w-43,y+h-42,30,28),'×','CLOSE')
@@ -255,26 +261,20 @@ class StyledPanel:
         seam_enabled=enabled and mesh.uv_layers.active is not None
         base=upper-191
         if self._tab=='CHECK':
-            p.text('01   UV И ГЕОМЕТРИЯ',x+21,base,12,skin.ink(t,kind='accent'))
-            # Featured read-only scan: returns a separate modal inspector
-            # instead of nesting GPU handlers inside the Geometry popup.
-            self._button(p,(x+17,base-55,w-34,44),
-                         'НАЙТИ UV-ШВЫ  ·  КРАСНЫЕ / ЖЁЛТЫЕ',
-                         'UV_SEAM_INSPECT',enabled)
-            p.text('Инспектор · независимые фильтры · F фокус · Esc выход',
-                   x+22,base-69,10,skin.ink(t,kind='muted'),width=w-44)
-            p.text('02   ДРУГИЕ ПРОВЕРКИ',x+21,base-90,12,skin.ink(t,kind='accent'))
-            actions=(('Зеркальные UV','FIND'),('Полный аудит UV','AUDIT'),
-                     ('Нормали и роли','NORMALS'),('Вместимость 2×2 / 2K','COVER2'),
-                     ('Вместимость 4×4 / 4K','COVER4'),('Исправить UV flip','FIX'),
-                     ('Подобрать оси Extrude','AXES'))
-            gap=8.;bw=(w-34-gap)/2.
+            p.text('01   ДИАГНОСТИКА UV',x+21,base,12,skin.ink(t,kind='accent'))
+            p.text('Проверки: ищем реальные ошибки, Mesh не меняем.',
+                   x+21,base-24,10,skin.ink(t,kind='muted'),width=w-42)
+            actions=(('Найти UV flip','FIND'),
+                     ('Полный отчёт UV','AUDIT'),
+                     ('Исправить UV flip','FIX'))
+            gap=9.;bw=(w-34-gap)/2.
             for i,(label,key) in enumerate(actions):
-                self._button(p,(x+17+(i%2)*(bw+gap),base-132-(i//2)*42,
-                                bw,36),label,key,enabled)
-            if h>545:
-                p.text('Проверки не меняют Mesh, кроме явных исправлений.',
-                       x+21,y+62,10,skin.ink(t,kind='muted'),width=w-42)
+                self._button(p,(x+17+(i%2)*(bw+gap),base-79-(i//2)*49,
+                                bw,39),label,key,enabled)
+            p.text('Исправление меняет UV. Проверка и отчёт — нет.',
+                   x+21,base-177,10,skin.ink(t,kind='muted'),width=w-42)
+            p.text('Ранее удалённые инструменты 2K/4K и Extrude не показываются.',
+                   x+21,base-202,10,skin.ink(t,kind='muted'),width=w-42)
         elif self._tab=='VIEW':
             from . import module_visualization
             state=module_visualization.status(context)
@@ -296,10 +296,19 @@ class StyledPanel:
             p.text('Операции меняют геометрию или свойства Mesh.',
                    x+21,base-24,11,skin.ink(t,kind='muted'))
             self._angle_controls(p,x+22,base-113,w-44)
-            self._button(p,(x+18,base-222,w-36,36),
+            from .core import quick_favorites
+            shade_pinned=quick_favorites.contains(quick_favorites.SHADE)
+            heart='♥' if shade_pinned else '♡'
+            self._button(p,(x+18,base-222,w-94,36),
                          'Применить Smooth by Angle','SMOOTH',enabled)
-            self._button(p,(x+18,base-267,w-36,36),
+            self._button(p,(x+w-67,base-222,49,36),heart,'PIN_SHADE',
+                         active=shade_pinned)
+            self._button(p,(x+18,base-267,w-94,36),
                          'Плоское затенение','FLAT',enabled)
+            self._button(p,(x+w-67,base-267,49,36),heart,'PIN_SHADE',
+                         active=shade_pinned)
+            p.text('♥  Повтор последнего шейдинга в избранном',
+                   x+21,base-295,10,skin.ink(t,kind='muted'),width=w-42)
         self._button(p,(x+18,y+16,w-36,32),'Закрыть','CLOSE')
 
     def _commit_edit(self):
@@ -377,6 +386,12 @@ class StyledPanel:
         return {'RUNNING_MODAL'}
 
     def _quality_action(self,context,key):
+        if key=='PIN_SHADE':
+            from .core import quick_favorites
+            pinned=quick_favorites.toggle(quick_favorites.SHADE)
+            self._message=('Шейдинг добавлен в избранное' if pinned else
+                           'Шейдинг удалён из избранного')
+            return
         if key.startswith('COLOR:'):
             colors=((.1,.8,.65),(.25,.55,1),(.95,.65,.15),(.9,.3,.4),(.8,.8,.85))
             context.scene.ima_uv_module_tint=(*colors[int(key.split(':')[1])],1.) if len(context.scene.ima_uv_module_tint)==4 else colors[int(key.split(':')[1])]
@@ -385,21 +400,30 @@ class StyledPanel:
             from .geometry_shading import apply_angle_smoothing
             apply_angle_smoothing(context,context.active_object,math.radians(context.scene.ima_uv_smooth_angle))
             bpy.ops.ed.undo_push(message='ISSMAKER · Сглаживание применено')
+            try:
+                from .core import quick_favorites
+                quick_favorites.record_shading('SMOOTH',float(context.scene.ima_uv_smooth_angle))
+            except (OSError,ValueError,RuntimeError) as saved_error:
+                from . import log
+                log.write('FAVORITE_LAST_SHADING_SAVE_FAILED: '+repr(saved_error))
             self._message='Сглаживание применено к Mesh';return
+        if key=='FLAT':
+            from .geometry_shading import apply_flat_shading
+            apply_flat_shading(context,context.active_object)
+            bpy.ops.ed.undo_push(message='ISSMAKER · Flat применён')
+            try:
+                from .core import quick_favorites
+                quick_favorites.record_shading('FLAT')
+            except (OSError,ValueError,RuntimeError) as saved_error:
+                from . import log
+                log.write('FAVORITE_LAST_SHADING_SAVE_FAILED: '+repr(saved_error))
+            self._message='Плоское затенение применено';return
         routes={'FIND':('select_flipped',{},True),'AUDIT':('uv_quality_report',{},False),
                 'NORMALS':('role_surface_report',{},False),'COVER2':('uv_module_coverage_report',{'resolution':'2048'},False),
                 'COVER4':('uv_module_coverage_report',{'resolution':'4096'},False),
-                'FIX':('uv_fix_mirrored_islands',{},False),'OVERLAY':('module_overlay',{},True),
-                'SEAMS':('module_mark_uv_seams',{},False),'FLAT':('wall_safe_shading',{'mode':'FLAT'},False),
+                'FIX':('uv_fix_local_flip',{},False),'OVERLAY':('module_overlay',{},True),
+                'SEAMS':('module_mark_uv_seams',{},False),
                 'AXES':('module_pick_axes',{},True)}
-        if key=='UV_SEAM_INSPECT':
-            # Two modal HUDs cannot own the same Esc/click route.
-            self.close_panel(context)
-            try:
-                with context.temp_override(area=self._area,region=self._region):
-                    bpy.ops.view3d.brick_hole_seam_scan('EXEC_DEFAULT')
-            except RuntimeError as exc:self.report({'ERROR'},str(exc)[:200])
-            return
         if key not in routes:return
         name,kwargs,invoke=routes[key]
         if key=='FIND':
@@ -409,6 +433,13 @@ class StyledPanel:
             with context.temp_override(area=self._area,region=self._region):
                 result=getattr(bpy.ops.ima,name)('INVOKE_DEFAULT' if invoke else 'EXEC_DEFAULT',**kwargs)
             if 'CANCELLED' not in result:
+                if key=='FLAT':
+                    try:
+                        from .core import quick_favorites
+                        quick_favorites.record_shading('FLAT')
+                    except (OSError,ValueError,RuntimeError) as saved_error:
+                        from . import log
+                        log.write('FAVORITE_LAST_SHADING_SAVE_FAILED: '+repr(saved_error))
                 self._message='Готово'
                 if key == 'OVERLAY':
                     from . import module_visualization

@@ -1,3 +1,4 @@
+from .extension_compat import addon_key
 import math
 import time
 import traceback
@@ -8,11 +9,9 @@ from mathutils import Matrix
 
 from . import modeling_tools, runtime, view_tools, ui_layout, uv_feedback, viewport_feedback, weld_preview, module_visualization, log
 from . import nav_hud_geometry, nav_hud_draw, tool_hud_draw, radial_geometry, radial_draw, tooltip_text, appearance_studio
-from .core import registry, action_trace, active_tools, ui_layout_scaling, window_visibility, theme_engine, appearance_store, pattern_engine
-from .tools.brick_hole import integration as brick_integration
+from .core import registry, action_trace, active_tools, ui_layout_scaling, window_visibility, theme_engine, appearance_store, pattern_engine, quick_favorites
 from .tools.collision_inspector import integration as collision_integration
 from .tools.uv_wall import integration as uv_wall_integration
-from .tools.dwos_windows import integration as dwos_integration
 
 
 COLOR_IDLE = (0.16, 0.18, 0.22)
@@ -48,7 +47,7 @@ def _tag_ui_redraw(_self, context):
 
 
 # UI Pass 11A — a single persistent appearance profile for every HUD.
-# No circular imports: core modules are pure and never import DWOS/UV Wall.
+# No circular imports: core modules are pure and never import shared tool/UV Wall.
 _APPEARANCE_READY = False
 _APPEARANCE_LOADING = False
 _APPEARANCE_DIRTY = False
@@ -273,15 +272,6 @@ class IMA_AddonPreferences(AddonPreferences):
     ui_wall_workspace_user_moved: bpy.props.BoolProperty(
         name='UV Wall Workspace manual position', default=False,
         update=_appearance_changed,options={'HIDDEN'})
-    # Pass 07A: DWOS floating Composer UI preferences; geometry is never modified.
-    ui_dwos_hud_custom: bpy.props.BoolProperty(name='DWOS пользовательская позиция',default=False,
-        options={'HIDDEN'},update=_appearance_changed)
-    ui_dwos_hud_pinned: bpy.props.BoolProperty(name='DWOS закреплён',default=False,
-        options={'HIDDEN'},update=_appearance_changed)
-    ui_dwos_hud_x: bpy.props.FloatProperty(name='DWOS HUD X',default=.06,min=0.,max=1.,
-        options={'HIDDEN'},update=_appearance_changed)
-    ui_dwos_hud_y: bpy.props.FloatProperty(name='DWOS HUD Y',default=.55,min=0.,max=1.,
-        options={'HIDDEN'},update=_appearance_changed)
     ui_studio_pos_x: bpy.props.FloatProperty(name='Позиция студии X',default=.50,min=0.,max=1.,update=_appearance_changed,options={'HIDDEN'})
     ui_studio_pos_y: bpy.props.FloatProperty(name='Позиция студии Y',default=.50,min=0.,max=1.,update=_appearance_changed,options={'HIDDEN'})
     ui_studio_tab: bpy.props.EnumProperty(name='Вкладка студии',items=(('GALLERY','Фоны',''),('DESIGN','Оформление',''),('TOOLS','Примеры','')),default='GALLERY',update=_appearance_changed,options={'HIDDEN'})
@@ -292,25 +282,11 @@ class IMA_AddonPreferences(AddonPreferences):
         ('RICH','Максимум','Полные анимации')), default='BALANCED',update=_appearance_changed)
     ui_reduced_motion: bpy.props.BoolProperty(name='Уменьшить движение', default=False, update=_appearance_changed)
 
-    # UV Wall's original preference fields live in the ONE root addon.
-    ui_mode: bpy.props.EnumProperty(name='UV Wall интерфейс',
-        items=(('FLOATING_PRO','Floating Pro','Контекстные окна'),
-               ('STUDIO_DOCK','Studio Dock','Закреплённый инспектор')), default='FLOATING_PRO',update=_appearance_changed)
     ui_theme: bpy.props.EnumProperty(name='UV Wall тема',
         items=(('OBSIDIAN','Obsidian Pro','Графит'),
                ('BLUEPRINT','Blueprint','Инженерный синий'),
                ('TITANIUM','Titanium','Металл'),
                ('EMBER','Carbon Ember','Медный акцент')), default='OBSIDIAN')
-    dock_sizing: bpy.props.EnumProperty(name='Размер Studio Dock',
-        items=(('AUTO','Авто','Адаптивный'),('MANUAL','Ручной','Заданный')),default='AUTO',update=_appearance_changed)
-    dock_manual_width: bpy.props.IntProperty(default=350,min=280,max=520,update=_appearance_changed)
-    dock_manual_height: bpy.props.IntProperty(default=620,min=344,max=1100,update=_appearance_changed)
-    dock_animation: bpy.props.EnumProperty(name='Анимация Dock',
-        items=(('OFF','Выключена',''),('ON','Плавная','')),default='ON')
-    dock_favorites_json: bpy.props.StringProperty(default='{}',options={'HIDDEN'})
-    dock_sections_json: bpy.props.StringProperty(default='{}',options={'HIDDEN'})
-    dock_presets_json: bpy.props.StringProperty(default='{}',options={'HIDDEN'})
-
     def draw(self, context):
         _draw_visual_preferences(self.layout, self)
 
@@ -415,7 +391,7 @@ class IMA_OT_WindowVisibility(Operator):
         rows=window_visibility.snapshot(self.scope)
         if not rows:
             layout.label(text='Активных зарегистрированных окон нет',icon='INFO')
-            layout.label(text='Откройте DWOS или Brick Hole')
+            layout.label(text='Откройте доступный инструмент')
             return
         for item in rows:
             row=layout.row(align=True)
@@ -757,7 +733,9 @@ class IMA_OT_ViewModePie(Operator):
                                            'RESET' if self.kind=='VIEW' else 'OFF'),
                                menu_kind=self.kind,
                                disabled=(radial_geometry.DISABLED_TOOL_IDS if self.kind=='TOOLS'
-                                         else frozenset()))
+                                         else frozenset()),
+                               favorites=(quick_favorites.favorites() if self.kind=='TOOLS'
+                                          else ()))
             if self.kind=='TOOLS':
                 appearance_studio.draw_radial_entry(self._center,self._scale,self._hover=='APPEARANCE',_accent(context))
                 appearance_studio.draw_geometry_entry(self._center,self._scale,self._hover=='GEOMETRY',_accent(context))
@@ -815,10 +793,14 @@ class IMA_OT_ViewModePie(Operator):
             dx=event.mouse_x-(self._region.x+self._center[0])
             dy=event.mouse_y-(self._region.y+self._center[1])
             hit=radial_geometry.polar_pick(dx,dy,self._scale, sectors=len(radial_geometry.TOOL_MODES) if self.kind=='TOOLS' else 8)
-            if self.kind=='TOOLS' and radial_geometry.appearance_pick(dx,dy,self._scale):
-                hit='APPEARANCE'
-            elif self.kind=='TOOLS' and radial_geometry.geometry_pick(dx,dy,self._scale):
-                hit='GEOMETRY'
+            if self.kind=='TOOLS':
+                favorite_index=radial_geometry.favorite_pick(dx,dy,self._scale)
+                if favorite_index>=0:
+                    hit='FAVORITE:'+radial_geometry.TOOL_MODES[favorite_index][0]
+                elif radial_geometry.appearance_pick(dx,dy,self._scale):
+                    hit='APPEARANCE'
+                elif radial_geometry.geometry_pick(dx,dy,self._scale):
+                    hit='GEOMETRY'
             if hit!=self._hover:
                 self._hover=hit
                 self._hover_start=time.monotonic()
@@ -828,10 +810,25 @@ class IMA_OT_ViewModePie(Operator):
             dx=event.mouse_x-(self._region.x+self._center[0])
             dy=event.mouse_y-(self._region.y+self._center[1])
             hit=radial_geometry.polar_pick(dx,dy,self._scale, sectors=len(radial_geometry.TOOL_MODES) if self.kind=='TOOLS' else 8)
-            if self.kind=='TOOLS' and radial_geometry.appearance_pick(dx,dy,self._scale):
-                hit='APPEARANCE'
-            elif self.kind=='TOOLS' and radial_geometry.geometry_pick(dx,dy,self._scale):
-                hit='GEOMETRY'
+            if self.kind=='TOOLS':
+                favorite_index=radial_geometry.favorite_pick(dx,dy,self._scale)
+                if favorite_index>=0:
+                    hit='FAVORITE:'+radial_geometry.TOOL_MODES[favorite_index][0]
+                elif radial_geometry.appearance_pick(dx,dy,self._scale):
+                    hit='APPEARANCE'
+                elif radial_geometry.geometry_pick(dx,dy,self._scale):
+                    hit='GEOMETRY'
+            if self.kind=='TOOLS' and isinstance(hit,str) and hit.startswith('FAVORITE:'):
+                identifier=hit.split(':',1)[1]
+                try:
+                    selected=quick_favorites.toggle(identifier)
+                    action_trace.record('FAVORITE_PIN' if selected else 'FAVORITE_UNPIN',
+                                        identifier,'RADIAL')
+                    self._area.tag_redraw()
+                except Exception as exc:
+                    log.write_exception('Favorite pin failed',exc)
+                    self.report({'WARNING'},'Не удалось сохранить избранное: '+str(exc)[:120])
+                return {'RUNNING_MODAL'}
             if self.kind == 'LINKED' and hit >= 0 and getattr(event,'shift',False):
                 mode=radial_geometry.QUICK_MODES[hit][0]
                 if mode!='OFF':
@@ -887,9 +884,12 @@ class IMA_OT_ViewModePie(Operator):
                     # This operator has identical invoke/execute logic. EXEC_DEFAULT
                     # avoids re-entering a second modal invocation from a closing
                     # modal chooser; the native tool itself still uses INVOKE_DEFAULT.
+                    # The tool starts from a genuine Blender pointing event,
+                    # not an app timer (app timers cannot register modal input
+                    # handlers reliably). The radial chooser is already closed.
                     with context.temp_override(window=self._window,area=self._area,region=self._region):
-                        result = bpy.ops.ima.launch_tool('EXEC_DEFAULT', tool_id=tool_id)
-                    return {'FINISHED'} if 'RUNNING_MODAL' in result or 'FINISHED' in result else {'CANCELLED'}
+                        result=bpy.ops.ima.launch_tool('EXEC_DEFAULT',tool_id=tool_id)
+                    return {'FINISHED'} if 'FINISHED' in result else {'CANCELLED'}
                 elif hit == -2:
                     bpy.ops.ima.restore_view('EXEC_DEFAULT')
                 else:
@@ -949,6 +949,82 @@ class IMA_OT_ToolRadial(Operator):
     def execute(self, context):
         self.report({'INFO'}, 'Откройте меню кнопкой во Viewport')
         return {'CANCELLED'}
+
+
+class IMA_OT_FavoriteLaunch(Operator):
+    """Quick tool launch from a real native Gizmo above the Tools opener."""
+    bl_idname='ima.favorite_launch'
+    bl_label='Избранный инструмент ISSMAKER'
+    bl_description='Открыть избранный инструмент, не заходя в радиальное меню'
+    bl_options={'REGISTER'}
+    tool_id:bpy.props.StringProperty(default='COLLISION')
+
+    @classmethod
+    def description(cls,context,properties):
+        return quick_favorites.tooltip(getattr(properties,'tool_id','COLLISION'))
+
+    @classmethod
+    def poll(cls,context):
+        return bool(context.area and context.area.type=='VIEW_3D')
+
+    def execute(self,context):
+        if self.tool_id not in quick_favorites.TOOLS:
+            self.report({'WARNING'},'Неизвестный инструмент')
+            return {'CANCELLED'}
+        if not quick_favorites.contains(self.tool_id):
+            self.report({'INFO'},'Инструмент больше не находится в избранном')
+            return {'CANCELLED'}
+        try:
+            action_trace.record('FAVORITE_TOOL_LAUNCH',self.tool_id,'Quick Dock')
+            result=bpy.ops.ima.launch_tool('EXEC_DEFAULT',tool_id=self.tool_id)
+            return {'FINISHED'} if 'FINISHED' in result else {'CANCELLED'}
+        except Exception as exc:
+            log.write_exception('Quick Favorite launch '+self.tool_id,exc)
+            self.report({'ERROR'},'Ошибка избранного: '+str(exc)[:140])
+            return {'CANCELLED'}
+
+
+class IMA_OT_FavoriteRepeatShading(Operator):
+    """Repeat the last *successfully applied* Geometry shading policy."""
+    bl_idname='ima.favorite_repeat_shading'
+    bl_label='Повторить последний шейдинг'
+    bl_description='Применить последний Smooth by Angle или Flat с тем же углом'
+    bl_options={'REGISTER','UNDO'}
+
+    @classmethod
+    def poll(cls,context):
+        return bool(context.area and context.area.type=='VIEW_3D')
+
+    def execute(self,context):
+        if not quick_favorites.contains(quick_favorites.SHADE):
+            self.report({'WARNING'},'Добавь шейдинг в избранное через Геометрию')
+            return {'CANCELLED'}
+        saved=quick_favorites.last_shading()
+        if saved is None:
+            self.report({'WARNING'},'Сначала примени Smooth или Flat в Геометрии')
+            return {'CANCELLED'}
+        ob=context.active_object
+        if ob is None or ob.type!='MESH' or context.mode!='OBJECT':
+            self.report({'WARNING'},'Для повтора шейдинга выбери Mesh в Object Mode')
+            return {'CANCELLED'}
+        try:
+            if saved['mode']=='FLAT':
+                from .geometry_shading import apply_flat_shading
+                apply_flat_shading(context,ob)
+                label='Flat'
+            else:
+                from .geometry_shading import apply_angle_smoothing
+                angle=float(saved['angle_degrees'])
+                apply_angle_smoothing(context,ob,math.radians(angle))
+                label=f'Smooth by Angle {angle:g}°'
+            action_trace.record('FAVORITE_SHADING_APPLIED','GEOMETRY',
+                                f'{ob.name} {label}')
+            self.report({'INFO'},'Избранный шейдинг: '+label)
+            return {'FINISHED'}
+        except Exception as exc:
+            log.write_exception('Favorite repeat shading',exc)
+            self.report({'ERROR'},'Шейдинг: '+str(exc)[:160])
+            return {'CANCELLED'}
 
 
 def _set_persistent_notice(context, message, tool_id='CORE', kind='WARNING'):
@@ -1026,12 +1102,32 @@ class IMA_OT_ClearNotice(Operator):
         return {'FINISHED'}
 
 
+class IMA_OT_ApplyUpdate(Operator):
+    """Safely reload only ISSMAKER modules, after this operator returns."""
+    bl_idname='ima.apply_update'
+    bl_label='Применить обновление без перезапуска'
+    bl_description=('Проверить исходники, сохранить резервную копию, перезагрузить '
+                    'аддон без перезапуска Blender, изменения геометрии или UV')
+    bl_options={'REGISTER'}
+
+    def execute(self, context):
+        from .core import hot_reload
+        try:
+            state=hot_reload.request_reload()
+            self.report({'INFO'},state['message'])
+            return {'FINISHED'}
+        except Exception as exc:
+            message=str(exc)
+            self.report({'WARNING'},message[:220])
+            return {'CANCELLED'}
+
+
 class IMA_OT_LaunchTool(Operator):
     """Safe bounded handoff into the original module's actual viewport operator."""
     bl_idname = 'ima.launch_tool'
     bl_label = 'Запустить инструмент ISSMAKER'
     bl_options = {'INTERNAL'}
-    tool_id: bpy.props.StringProperty(default='BRICK_HOLE')
+    tool_id: bpy.props.StringProperty(default='COLLISION')
 
     @classmethod
     def poll(cls, context):
@@ -1065,69 +1161,6 @@ class IMA_OT_LaunchTool(Operator):
             _show_tool_notice(context, reason, 'Переключение')
         return ok
 
-    def _launch_dwos(self, context, tool):
-        ready, reason, action = dwos_integration.can_start(context)
-        action_trace.record('CONTEXT_CHECK', 'DWOS', reason)
-        if not ready:
-            self.report({'WARNING'},reason)
-            _show_tool_notice(context, reason, 'Окна')
-            return {'CANCELLED'}
-        region = next((r for r in context.area.regions if r.type=='WINDOW'),None)
-        if region is None:
-            _show_tool_notice(context,'Окна: не найден WINDOW-регион 3D Viewport','Окна')
-            return {'CANCELLED'}
-        try:
-            if action == 'AUTO':
-                action_trace.record('AUTO_BUILD_REQUEST','DWOS','dwos.auto_windows')
-                with context.temp_override(window=context.window, area=context.area, region=region):
-                    outcome=bpy.ops.dwos.auto_windows('INVOKE_DEFAULT')
-                if 'FINISHED' in outcome:
-                    _clear_persistent_notice(context)
-                    action_trace.record('AUTO_BUILD_FINISHED','DWOS')
-                    return {'FINISHED'}
-                _show_tool_notice(context,'DWOS: автоматическое построение отклонено; проверьте причину в статусе Blender.','Окна')
-                return {'CANCELLED'}
-            if action == 'COMPOSER':
-                action_trace.record('PREVIEW_REQUEST','DWOS','dwos.viewport_composer')
-                with context.temp_override(window=context.window, area=context.area, region=region):
-                    result=bpy.ops.dwos.viewport_composer('INVOKE_DEFAULT')
-                if 'RUNNING_MODAL' in result:
-                    _clear_persistent_notice(context)
-                    action_trace.record('PREVIEW_START','DWOS')
-                    return {'FINISHED'}
-                _show_tool_notice(context,'DWOS Composer не открылся. Проверьте окно и журнал DWOS.','Окна')
-                return {'CANCELLED'}
-            action_trace.record('DETECTION_REQUEST','DWOS','dwos.find_openings')
-            with context.temp_override(window=context.window, area=context.area, region=region):
-                result=bpy.ops.dwos.find_openings('EXEC_DEFAULT')
-            if 'FINISHED' not in result:
-                _show_tool_notice(context,'Не удалось найти проёмы. Проверьте топологию стены и журнал DWOS.','Окна')
-                return {'CANCELLED'}
-            state=getattr(context.scene,'dwos',None)
-            count=len(state.openings) if state is not None else 0
-            context.scene.ima_suite_tab='DWOS'
-            context.scene.ima_dwos_tab='MAIN'
-            if count:
-                notice=f'Найдено проёмов: {count}. Нажмите «СОЗДАТЬ ОКНА» во Viewport.'
-                _set_persistent_notice(context, notice,'DWOS','INFO')
-                # Esc cancels the floating DWOS create workflow. This modal
-                # immediately stops when candidates disappear or area changes.
-                try:
-                    with context.temp_override(window=context.window, area=context.area, region=region):
-                        bpy.ops.ima.dwos_create_session('INVOKE_DEFAULT')
-                except (RuntimeError, ValueError, AttributeError) as exc:
-                    log.write_exception('DWOS create Esc watcher',exc)
-            else:
-                notice='Проёмов не найдено. Проверьте Mesh-стену или выберите готовое окно DWOS.'
-                _show_tool_notice(context, notice,'Окна')
-            self.report({'INFO'},notice)
-            action_trace.record('DETECTION_FINISHED','DWOS',notice)
-            return {'FINISHED'}
-        except (RuntimeError,ReferenceError,ValueError,TypeError,AttributeError) as exc:
-            action_trace.record('DWOS_LAUNCH_ERROR','DWOS',str(exc))
-            log.write_exception('DWOS launch failed',exc)
-            _show_tool_notice(context,'Ошибка DWOS: '+str(exc)[:160],'Окна')
-            return {'CANCELLED'}
 
     def _launch(self, context):
         # Pass 06.5: user selecting a tool means leaving the previous tool,
@@ -1144,8 +1177,6 @@ class IMA_OT_LaunchTool(Operator):
             action_trace.record('TOOL_UNAVAILABLE', self.tool_id)
             return {'CANCELLED'}
         # Each independent module owns its own context contract.
-        if tool.tool_id == 'DWOS':
-            return self._launch_dwos(context, tool)
         if tool.tool_id == 'COLLISION':
             ready, reason = collision_integration.can_start(context)
             action_trace.record('CONTEXT_CHECK', tool.tool_id, reason)
@@ -1212,46 +1243,8 @@ class IMA_OT_LaunchTool(Operator):
                 self.report({'ERROR'}, str(exc)[:180])
                 _show_tool_notice(context, 'Ошибка запуска стены: ' + str(exc)[:190])
                 return {'CANCELLED'}
-        if tool.tool_id != 'BRICK_HOLE':
-            self.report({'WARNING'}, 'Нет адаптера запуска: ' + tool.tool_id)
-            return {'CANCELLED'}
-        ready, reason = brick_integration.can_start(context)
-        action_trace.record('CONTEXT_CHECK', tool.tool_id, reason)
-        if not ready:
-            self.report({'WARNING'}, reason)
-            _show_tool_notice(context, reason, 'Проёмы')
-            return {'CANCELLED'}
-        if brick_integration.is_preview_active():
-            self.report({'WARNING'}, 'Предпросмотр проёмов уже активен')
-            _show_tool_notice(context,'Проёмы: предпросмотр уже активен. Завершите или отмените текущий Preview.')
-            action_trace.record('TOOL_BUSY', tool.tool_id)
-            return {'CANCELLED'}
-        window_region = next((r for r in context.area.regions if r.type == 'WINDOW'), None)
-        if window_region is None:
-            self.report({'WARNING'}, '3D Viewport: регион WINDOW не найден')
-            return {'CANCELLED'}
-        try:
-            # N-panel buttons have region=UI. The native modal operator MUST
-            # start in VIEW_3D/WINDOW with its original invoke/preflight.
-            action_trace.record('PREVIEW_REQUEST', tool.tool_id, tool.entry_operator)
-            with context.temp_override(window=context.window, area=context.area,
-                                       region=window_region):
-                result = bpy.ops.view3d.brick_hole_interactive('INVOKE_DEFAULT')
-            if 'RUNNING_MODAL' in result:
-                _clear_persistent_notice(context)
-                action_trace.record('PREVIEW_START', tool.tool_id)
-                return {'FINISHED'}
-            state = str(getattr(context.scene, 'brick_hole_interactive_state', ''))
-            action_trace.record('PREVIEW_BLOCKED', tool.tool_id, state)
-            self.report({'WARNING'}, (state or 'Viewport Preview не запущен')[:180])
-            _show_tool_notice(context,state or 'Проёмы: Preview не запущен. Проверьте режим выделения.')
-            return {'CANCELLED'}
-        except (RuntimeError, ValueError, ReferenceError, AttributeError) as exc:
-            action_trace.record('PREVIEW_ERROR', tool.tool_id, exc)
-            log.write_exception('Integrated Brick Hole launch failed', exc)
-            self.report({'ERROR'}, 'Проёмы: %s' % str(exc)[:175])
-            _show_tool_notice(context,'Проёмы: '+str(exc)[:150])
-            return {'CANCELLED'}
+        self.report({'WARNING'}, 'Нет адаптера запуска: ' + tool.tool_id)
+        return {'CANCELLED'}
 
 
 class IMA_OT_AuditWallSeams(Operator):
@@ -1532,6 +1525,18 @@ class IMA_GGT_Viewport(GizmoGroup):
             _button(self, 'ima.view_mode_pie', VIEW_DOCK_ICONS[1], kind='VIEW'),
             _button(self, 'ima.tool_radial', VIEW_DOCK_ICONS[2]),
         ]
+        # Create stable Gizmos once. Only their visibility/position changes.
+        # Tool IDs never travel through an ad-hoc mouse observer.
+        self.favorite_buttons={}
+        for identifier in quick_favorites.ALLOWED:
+            if identifier==quick_favorites.SHADE:
+                button=_button(self,'ima.favorite_repeat_shading',
+                               quick_favorites.icon(identifier))
+            else:
+                button=_button(self,'ima.favorite_launch',
+                               quick_favorites.icon(identifier),tool_id=identifier)
+            button.hide=True
+            self.favorite_buttons[identifier]=button
 
     def draw_prepare(self, context):
         points = _viewport_positions(context, _dock_count(context))['view']
@@ -1545,234 +1550,40 @@ class IMA_GGT_Viewport(GizmoGroup):
             _skin(self.buttons[0], context, active=True)
         if len(points) > 1 and getattr(context.scene, 'ima_view_mode_state', 'RESTORE') != 'RESTORE':
             _skin(self.buttons[1], context, active=True, active_color=COLOR_PURPLE)
-        if len(points) > 2 and brick_integration.is_preview_active():
-            _skin(self.buttons[2], context, active=True, active_color=COLOR_GREEN)
+        for button in self.favorite_buttons.values():
+            button.hide=True
+        if len(points)>=3:
+            pinned=quick_favorites.favorites()
+            slots=quick_favorites.quick_positions(
+                points[2],len(pinned),context.region.height,
+                _pref(context,'button_scale',1.0))
+            for identifier,xy in zip(pinned,slots):
+                button=self.favorite_buttons[identifier]
+                button.hide=False
+                button.tool_icon=quick_favorites.icon(identifier)
+                button.matrix_basis=Matrix.Translation((*xy,0))
+                _skin(button,context,active=False)
+                button.pixel_size=32.0*_pref(context,'button_scale',1.0)
         _track_tool_highlight(context, self.buttons)
 
 
 
-# PASS 04.1: DWOS candidates are actionable directly in the Viewport.
+# PASS 04.1: shared tool candidates are actionable directly in the Viewport.
 # Use one condition and one rectangle calculation for the GPU paint and Gizmo hit-test.
-def _dwos_suspect(candidate):
-    """Non-destructive advisory, not a hard dimensional limit for real windows."""
-    try:
-        width=float(str(candidate.width_text).replace(',','.'))
-        height=float(str(candidate.height_text).replace(',','.'))
-        payload=__import__('json').loads(getattr(candidate,'payload_json','{}') or '{}')
-        kind=str(payload.get('adaptive_classification',payload.get('classification','')))
-        return bool(kind == 'CURVED' and height > 0 and width > 15. and width/height > 7.)
-    except (ValueError,TypeError,AttributeError):
-        return False
 
 
-class IMA_OT_DWOSExcludeSuspicious(Operator):
-    bl_idname='ima.dwos_exclude_suspicious'
-    bl_label='Исключить подозрительные проёмы'
-    bl_description='Снять галочки с аномально длинных CURVED-кандидатов, оставив их в списке'
-    bl_options={'REGISTER','INTERNAL'}
-
-    def execute(self, context):
-        state=getattr(getattr(context,'scene',None),'dwos',None)
-        if state is None:
-            self.report({'WARNING'},'DWOS не зарегистрирован')
-            return {'CANCELLED'}
-        changed=0
-        for candidate in state.openings:
-            if candidate.enabled and _dwos_suspect(candidate):
-                candidate.enabled=False
-                changed+=1
-        action_trace.record('DWOS_SUSPECT_EXCLUDED','DWOS',f'count={changed}')
-        self.report({'INFO'},f'Подозрительных кандидатов отключено: {changed}. Их можно включить вручную.')
-        if context.area: context.area.tag_redraw()
-        return {'FINISHED'}
 
 
-def _dwos_creation_state(context):
-    if (not getattr(context, 'scene', None) or
-            getattr(context, 'mode', None) != 'OBJECT'):
-        return False, 'Для создания окон перейдите в Object Mode.', 0
-    state = getattr(context.scene, 'dwos', None)
-    if state is None:
-        return False, 'Модуль DWOS не зарегистрирован.', 0
-    wall_name = getattr(state, 'wall_name', '')
-    host = bpy.data.objects.get(wall_name) if wall_name else None
-    if not host or host.type != 'MESH':
-        return False, 'Исходная Mesh-стена не найдена. Снова выполните поиск проёмов.', 0
-    active = getattr(context, 'active_object', None)
-    if active is None or active != host:
-        return False, 'Выделите стену, на которой были найдены проёмы.', 0
-    if not getattr(state, 'show_overlay', False):
-        return False, 'После создания повторно выполните поиск, чтобы создать новую группу окон.', 0
-    count = sum(bool(c.enabled) for c in state.openings)
-    if not count:
-        return False, 'Нет выбранных проёмов. Сначала выполните поиск.', 0
-    return True, f'Найдено {count} проёмов, можно создать окна.', count
 
 
-def _dwos_create_rect(context):
-    ready, _reason, count = _dwos_creation_state(context)
-    if not ready or not context.area or context.area.type != 'VIEW_3D':
-        return None
-    region = getattr(context, 'region', None)
-    if not region or region.type != 'WINDOW' or region.width < 360 or region.height < 270:
-        return None
-    width = min(270.0, float(region.width) - 72.0)
-    height = 56.0
-    x = (float(region.width) - width) * .5
-    y = min(103.0, max(62.0, float(region.height) * .14))
-    return x, y, width, height, count
 
 
-class IMA_OT_DWOSCreateWindows(Operator):
-    bl_idname = 'ima.dwos_create_windows'
-    bl_label = 'Создать окна DWOS'
-    bl_description = 'Создать окна в найденных проёмах выбранной стены'
-    bl_options = {'REGISTER', 'INTERNAL'}
-
-    def execute(self, context):
-        ok, reason, count = _dwos_creation_state(context)
-        if not ok:
-            self.report({'WARNING'}, reason)
-            _show_tool_notice(context, reason, 'Окна')
-            return {'CANCELLED'}
-        window_region = next((r for r in context.area.regions if r.type == 'WINDOW'), None) if context.area else None
-        if context.area is None or context.area.type != 'VIEW_3D' or window_region is None:
-            reason = 'Откройте 3D Viewport для создания окон DWOS.'
-            self.report({'WARNING'}, reason)
-            _show_tool_notice(context, reason, 'Окна')
-            return {'CANCELLED'}
-        action_trace.record('DWOS_CREATE_REQUEST', 'DWOS', f'candidates={count}')
-        try:
-            with context.temp_override(window=context.window, area=context.area, region=window_region):
-                result = bpy.ops.dwos.create_windows('EXEC_DEFAULT')
-            if 'FINISHED' not in result:
-                action_trace.record('DWOS_CREATE_CANCELLED', 'DWOS', f'candidates={count}')
-                msg = 'DWOS не создал окна. Причина указана в журнале DWOS и строке состояния Blender.'
-                _show_tool_notice(context, msg, 'Окна')
-                return {'CANCELLED'}
-            action_trace.record('DWOS_CREATE_FINISHED', 'DWOS', f'candidates={count}')
-            context.scene.ima_suite_tab = 'DWOS'
-            context.scene.ima_dwos_tab = 'MAIN'
-            try:
-                with context.temp_override(window=context.window, area=context.area,
-                                           region=window_region):
-                    composer_result=bpy.ops.dwos.viewport_composer('INVOKE_DEFAULT')
-                if 'RUNNING_MODAL' in composer_result or 'FINISHED' in composer_result:
-                    _clear_persistent_notice(context)
-                    action_trace.record('DWOS_AUTO_COMPOSER_OPENED','DWOS',
-                                        getattr(context.active_object,'name',''))
-                else:
-                    raise RuntimeError('Composer вернул '+str(composer_result))
-            except (RuntimeError, ValueError, TypeError, AttributeError, ReferenceError) as composer_exc:
-                # Geometry was already successfully committed: do NOT roll it
-                # back merely because opening a UI session failed.
-                log.write_exception('DWOS auto Composer unavailable after successful create',composer_exc)
-                action_trace.record('DWOS_AUTO_COMPOSER_FAILED','DWOS',str(composer_exc)[:240])
-                _set_persistent_notice(context,
-                    'Окна созданы. Composer не открылся: выберите окно и откройте Composer вручную.',
-                    'DWOS','WARNING')
-                self.report({'WARNING'},'Окна созданы, но Composer не открылся')
-            context.area.tag_redraw()
-            return {'FINISHED'}
-        except (RuntimeError, ValueError, TypeError, AttributeError, ReferenceError) as exc:
-            action_trace.record('DWOS_CREATE_ERROR', 'DWOS', str(exc))
-            log.write_exception('DWOS viewport creation failed', exc)
-            _show_tool_notice(context, 'Не удалось создать окна: ' + str(exc)[:150], 'Окна')
-            return {'CANCELLED'}
 
 
-class IMA_OT_DWOSCreateSession(Operator):
-    """Esc dismisses the candidate-creation overlay, not the whole Blender tool."""
-    bl_idname='ima.dwos_create_session'
-    bl_label='Контекст создания окон DWOS'
-    bl_options={'INTERNAL'}
-
-    def invoke(self, context, event):
-        ok, _, _ = _dwos_creation_state(context)
-        if not ok:
-            return {'CANCELLED'}
-        self._area_ptr=context.area.as_pointer() if context.area else 0
-        context.window_manager.modal_handler_add(self)
-        return {'RUNNING_MODAL'}
-
-    def modal(self, context, event):
-        if (not context.area or context.area.as_pointer()!=self._area_ptr
-                or not _dwos_creation_state(context)[0]):
-            return {'FINISHED'}
-        if event.type=='ESC' and event.value=='PRESS':
-            state=context.scene.dwos
-            state.show_overlay=False
-            _clear_persistent_notice(context)
-            action_trace.record('DWOS_CREATE_ESC_CANCELLED','DWOS','candidates kept; create overlay hidden')
-            context.area.tag_redraw()
-            return {'FINISHED'}
-        return {'PASS_THROUGH'}
 
 
-class IMA_GT_DWOSCreateButton(Gizmo):
-    bl_idname = 'IMA_GT_dwos_create_button'
-    bl_label = 'Создать окна'
-    bl_target_properties = ()
-
-    def setup(self):
-        self.use_event_handle_all = False
-        self.use_draw_hover = True
-        self.use_undo = False
-        self.use_tooltip = True
-        vertices = ((-.5,-.5,0.),(.5,-.5,0.),(.5,.5,0.),
-                    (-.5,-.5,0.),(.5,.5,0.),(-.5,.5,0.))
-        self._shape = self.new_custom_shape('TRIS', vertices)
-        self.color = (0, 0, 0)
-        self.color_highlight = (0, 0, 0)
-        self.alpha = 0.0
-        self.alpha_highlight = 0.0
-        self._hit_w = 0.0
-        self._hit_h = 0.0
-
-    def _matrix(self):
-        return self.matrix_basis @ Matrix.Diagonal((self._hit_w, self._hit_h, 1., 1.))
-
-    def draw(self, context):
-        if not self.hide:
-            self.draw_custom_shape(self._shape, matrix=self._matrix())
-
-    def draw_select(self, context, select_id):
-        if not self.hide:
-            self.draw_custom_shape(self._shape, matrix=self._matrix(), select_id=select_id)
-
-    def test_select(self, context, location):
-        if self.hide or _dwos_create_rect(context) is None:
-            return -1
-        x, y = location
-        cx, cy, _ = self.matrix_basis.translation
-        return 0 if abs(x-cx) <= self._hit_w * .5 and abs(y-cy) <= self._hit_h * .5 else -1
 
 
-class IMA_GGT_DWOSCreate(GizmoGroup):
-    bl_idname = 'IMA_GGT_dwos_create'
-    bl_label = 'Создание окон DWOS во Viewport'
-    bl_space_type = 'VIEW_3D'
-    bl_region_type = 'WINDOW'
-    bl_options = {'PERSISTENT', 'SCALE', 'SHOW_MODAL_ALL'}
-
-    @classmethod
-    def poll(cls, context):
-        return bool(context.area and context.area.type == 'VIEW_3D' and context.mode == 'OBJECT')
-
-    def setup(self, context):
-        self.button = self.gizmos.new('IMA_GT_dwos_create_button')
-        self.button.target_set_operator('ima.dwos_create_windows')
-
-    def draw_prepare(self, context):
-        rect = _dwos_create_rect(context)
-        if rect is None:
-            self.button.hide = True
-            return
-        x, y, w, h, _count = rect
-        self.button.hide = False
-        self.button._hit_w = w
-        self.button._hit_h = h
-        self.button.matrix_basis = Matrix.Translation((x + w * .5, y + h * .5, 0.))
 
 
 class IMA_GGT_EditTools(GizmoGroup):
@@ -2126,9 +1937,10 @@ class IMA_GGT_UV(GizmoGroup):
 
     def setup(self, context):
         self.buttons = [
-            _button(self, "ima.uv_align", 'PIVOT_BOUNDBOX'),
-            _button(self, "ima.set_texel_density", 'UV_DATA'),
-            _button(self, "ima.unwrap_glass", 'MOD_UVPROJECT'),
+            _button(self, "ima.uv_align", 'PIVOT_BOUNDBOX', selection_source='UV'),
+            _button(self, "ima.set_texel_density", 'UV_DATA', selection_source='UV'),
+            _button(self, "ima.unwrap_glass", 'MOD_UVPROJECT', selection_source='UV'),
+            _button(self, "ima.uv_move_to_udim", 'UV_ISLANDSEL'),
         ]
 
     def draw_prepare(self, context):
@@ -2193,9 +2005,10 @@ def draw_uv_header(self, context):
         row.operator('ima.toggle_uv_feedback', text='',
                      icon='HIDE_OFF' if _pref(context, 'show_uv_issue_overlay', True) else 'HIDE_ON')
     if context.area.width >= 910:
-        row.operator('ima.uv_align', text='', icon='PIVOT_BOUNDBOX')
-        row.operator('ima.set_texel_density', text='1000', icon='UV_DATA')
-        row.operator('ima.unwrap_glass', text='Стекло', icon='MOD_UVPROJECT')
+        row.operator('ima.uv_align', text='', icon='PIVOT_BOUNDBOX').selection_source='UV'
+        row.operator('ima.set_texel_density', text='1000', icon='UV_DATA').selection_source='UV'
+        row.operator('ima.unwrap_glass', text='Стекло', icon='MOD_UVPROJECT').selection_source='UV'
+        row.operator('ima.uv_move_to_udim', text='UDIM', icon='UV_ISLANDSEL')
 
 
 class IMA_PT_VisualSettings(Panel):
@@ -2214,118 +2027,8 @@ class IMA_PT_VisualSettings(Panel):
             for key, text, icon in entries[offset:offset + 2]:
                 row.prop_enum(scene, field, key, text=text, icon=icon)
 
-    @staticmethod
-    def _opening_status(context, layout):
-        from .tools.brick_hole import integration as integration
-        if integration.is_preview_active():
-            layout.label(text='Preview уже открыт', icon='INFO')
-            return False
-        if context.mode != 'EDIT_MESH':
-            layout.label(text='Сначала: Tab → Edit Mode', icon='INFO')
-            return False
-        obj = context.edit_object
-        if not obj or obj.type != 'MESH':
-            layout.label(text='Нужен Mesh в Edit Mode', icon='ERROR')
-            return False
-        selection = tuple(bool(x) for x in context.tool_settings.mesh_select_mode)
-        if selection not in ((False, True, False), (False, False, True)):
-            layout.label(text='Выбери режим: 2 или 3', icon='INFO')
-            layout.label(text='2 — рёбра, 3 — грани')
-            return False
-        label = 'Рёбра (2)' if selection[1] else 'Грани (3)'
-        layout.label(text='Режим: ' + label, icon='CHECKMARK')
-        layout.label(text='Выдели контур проёма', icon='INFO')
-        return True
 
-    @staticmethod
-    def _openings_main(context, layout):
-        scene = context.scene
-        box = layout.box()
-        box.label(text='Создание проёма', icon='MOD_SOLIDIFY')
-        can_invoke = IMA_PT_VisualSettings._opening_status(context, box)
-        settings = layout.box()
-        settings.label(text='Параметры', icon='SETTINGS')
-        col = settings.column(align=True)
-        col.prop(scene, 'brick_hole_depth', text='Глубина, м')
-        col.prop(scene, 'brick_hole_direction', text='Направление')
-        if context.mode == 'EDIT_MESH' and context.edit_object is not None:
-            flags = tuple(bool(x) for x in context.tool_settings.mesh_select_mode)
-            if flags == (False, True, False):
-                col.prop(scene, 'brick_hole_direction_source', text='Источник оси')
-                if scene.brick_hole_direction_source in {'GLOBAL','FACE','MANUAL'}:
-                    col.prop(scene, 'brick_hole_manual_normal', text='Ось XYZ')
-                    row = col.row(align=True)
-                    for axis in ('X', 'Y', 'Z'):
-                        row.operator('mesh.brick_hole_set_manual_axis', text=axis).axis = axis
-        # BH-03.2C · On-demand safe Edge candidate; no automatic modification.
-        if (context.mode == 'EDIT_MESH' and context.edit_object is not None
-                and tuple(bool(v) for v in context.tool_settings.mesh_select_mode)==(False,True,False)):
-            safe_box=layout.box()
-            safe_box.label(text='SAFE DEPTH · Предел для рёбер',icon='LOCKED')
-            safe_buttons=safe_box.row(align=True)
-            safe_buttons.operator('mesh.brick_hole_safe_depth',
-                text='Найти допустимую',icon='VIEWZOOM').action='FIND'
-            safe_buttons.operator('mesh.brick_hole_safe_depth',
-                text='Применить',icon='CHECKMARK').action='USE'
-            safe_box.label(text=str(getattr(scene,'brick_hole_safe_depth_status',
-                'Проверка ещё не проводилась'))[:115],icon='INFO')
-            safe_box.label(text='Не максимальная глубина · пересчёт перед применением',icon='INFO')
-        actions = layout.column(align=True)
-        actions.scale_y = 1.18
-        launch = actions.row()
-        launch.enabled = can_invoke
-        launch.operator('ima.launch_tool', text='НАСТРОИТЬ В VIEWPORT', icon='GIZMO').tool_id = 'BRICK_HOLE'
-        # Pass through to the original production operators for Mesh operations.
-        row = actions.row(align=True)
-        row.enabled = can_invoke
-        row.operator('mesh.brick_hole_extrude_unified', text='Создать', icon='MOD_SOLIDIFY')
-        row.operator('mesh.brick_hole_preview_unified', text='Проверить', icon='VIEWZOOM')
-        # PASS05: transaction failures remain visible after the fading Blender
-        # report; use the same persistent notice mechanism as other tools.
-        recent_error = str(getattr(scene, 'brick_hole_preview_text', ''))
-        if recent_error.startswith('ERROR:'):
-            error_box = layout.box()
-            error_box.alert = True
-            error_box.label(text='Последняя ошибка построения', icon='ERROR')
-            import textwrap
-            for piece in textwrap.wrap(recent_error[6:].strip(), width=40,
-                                       break_long_words=False)[:6]:
-                error_box.label(text=piece)
-            error_box.label(text='Подробнее: BrickHole_Log', icon='CONSOLE')
-        state = str(scene.brick_hole_interactive_state)
-        if state.startswith(('ERROR', 'STALE', 'BLOCKED')):
-            error = layout.box()
-            error.alert = True
-            error.label(text='Ошибка запуска Preview', icon='ERROR')
-            # Full diagnostics remain available; do not dump an 80-char
-            # traceback label that gets clipped by a narrow N-panel.
-            error.label(text=state[:28])
-        if not can_invoke:
-            hint = layout.box()
-            hint.label(text='Когда режим будет готов,', icon='INFO')
-            hint.label(text='кнопка станет доступна.')
 
-    @staticmethod
-    def _openings_subsection(context, layout, section):
-        from types import SimpleNamespace
-        from .tools import brick_hole as bh
-        # Reuse the existing property handlers but never reuse their own
-        # N-panel registration; keep the package's data model unchanged.
-        panels = {
-            'GEOMETRY': bh.VIEW3D_PT_brick_hole_geometry,
-            'APPEARANCE': bh.VIEW3D_PT_brick_hole_texture,
-            'TESTS': bh.VIEW3D_PT_brick_hole_advanced,
-        }
-        panel = panels.get(section)
-        if panel is None:
-            return
-        box = layout.box()
-        box.label(text={'GEOMETRY':'UV и материалы',
-                        'APPEARANCE':'Внешний вид',
-                        'TESTS':'Тесты и диагностика'}[section],
-                  icon={'GEOMETRY':'UV_DATA','APPEARANCE':'HIDE_OFF',
-                        'TESTS':'CHECKMARK'}[section])
-        panel.draw(SimpleNamespace(layout=box), context)
 
     @staticmethod
     def _collision_main(context, layout):
@@ -2390,86 +2093,7 @@ class IMA_PT_VisualSettings(Panel):
             row.operator('collision_inspector.copy_log', text='Лог', icon='COPYDOWN')
             row.operator('collision_inspector.copy_error', text='Ошибки', icon='ERROR')
 
-    @staticmethod
-    def _dwos_main(context, layout):
-        ready, reason, action = dwos_integration.can_start(context)
-        obj=getattr(context,'active_object',None)
-        if (obj is not None and getattr(obj,'type',None)=='MESH'
-                and getattr(context,'mode',None)=='EDIT_MESH'):
-            manual=layout.box()
-            manual.label(text='РУЧНОЙ КОНТУР ОКНА',icon='EDITMODE_HLT')
-            manual.label(text='Грани дна проёма или его рёбра')
-            manual.operator('dwos.use_selected_cap_faces',
-                            text='Использовать выделенные грани',icon='FACESEL')
-            manual.operator('dwos.use_selected_openings',
-                            text='Использовать выделенные контуры',icon='EDGESEL')
-            manual.label(text='Затем Tab: Object Mode для создания')
-        box=layout.box()
-        box.label(text='DWOS Window Core · 3.7.37 RC38',icon='SHADING_SOLID')
-        obj=getattr(context,'active_object',None)
-        box.label(text='Выбрано: '+obj.name[:26] if obj else 'Объект не выделен')
-        if ready:
-            box.label(text='Composer готов' if action=='COMPOSER' else 'Готов к поиску проёмов',icon='CHECKMARK')
-        else:
-            box.alert=True
-            import textwrap
-            for line in textwrap.wrap(reason,35,break_long_words=False):
-                box.label(text=line,icon='INFO' if line==reason else 'NONE')
-        row=layout.column(align=True);row.scale_y=1.4
-        row.operator('ima.launch_tool',text=('ОТКРЫТЬ COMPOSER' if action=='COMPOSER' else 'НАЙТИ ПРОЁМЫ / ОТКРЫТЬ ОКНА'),icon='PLAY').tool_id='DWOS'
-        state=getattr(context.scene,'dwos',None)
-        if state is None:
-            layout.label(text='DWOS не зарегистрирован',icon='ERROR');return
-        if state.status:
-            box=layout.box()
-            import textwrap
-            for line in textwrap.wrap(state.status,36,break_long_words=False)[:4]: box.label(text=line)
-        windows=len(state.openings)
-        if windows:
-            suspect=[c for c in state.openings if c.enabled and _dwos_suspect(c)]
-            if suspect:
-                warning=layout.box()
-                warning.alert=True
-                warning.label(text=f'Проверьте CURVED: {len(suspect)}',icon='ERROR')
-                warning.label(text='Возможен ложный контур стены')
-                warning.operator('ima.dwos_exclude_suspicious',text='Исключить подозрительные',icon='REMOVE')
-            # Show explicit candidate selection: one bad shape must not hide a valid 4m window.
-            candidates=layout.box()
-            candidates.label(text='Выбор проёмов',icon='MESH_GRID')
-            for i,c in enumerate(state.openings):
-                line=candidates.row(align=True)
-                line.prop(c,'enabled',text='')
-                line.label(text=f'{i+1}: {c.width_text} × {c.height_text} м'[:35])
-                if _dwos_suspect(c):line.label(text='',icon='ERROR')
 
-            box=layout.box()
-            box.label(text=f'Найдено проёмов: {windows}',icon='CHECKMARK')
-            if _dwos_creation_state(context)[0]:
-                box.operator('ima.dwos_create_windows',text='СОЗДАТЬ ОКНА',icon='MESH_GRID')
-            else:
-                box.label(text='Для новой группы повторите поиск',icon='INFO')
-        layout.label(text='Настройки, COPY и диагностика — вкладки ниже',icon='INFO')
-
-    @staticmethod
-    def _dwos_subsection(context, layout, section):
-        from types import SimpleNamespace
-        from .tools.dwos_windows.native import ui as dwos_ui
-        if section == 'STUDIO':
-            box=layout.box()
-            box.label(text='Оригинальные настройки DWOS',icon='TOOL_SETTINGS')
-            # Delegates to native draw without registering its standalone N-panel.
-            dwos_ui.DWOS_PT_main.draw(SimpleNamespace(layout=box),context)
-        elif section == 'DIAG':
-            box=layout.box()
-            box.label(text='DWOS · Контроль качества',icon='CHECKMARK')
-            box.operator('dwos.audit_mesh_consistency',text='Аудит рам и стекла',icon='CHECKMARK')
-            box.operator('dwos.analyze_meshes',text='Полный Mesh Analysis',icon='VIEWZOOM').reason='MANUAL_RELEASE'
-            box.operator('dwos.export_field_bundle',text='DWOS ZIP · диагностика',icon='PACKAGE')
-            from .tools.dwos_windows.native.surface_steps import draw_diagnostic
-            draw_diagnostic(box,context)
-            box.label(text='Генерация тестов — в Настройках DWOS')
-        else:
-            layout.label(text='Раздел пока недоступен',icon='INFO')
 
     @staticmethod
     def _wall_main(context, layout):
@@ -2538,10 +2162,8 @@ class IMA_PT_VisualSettings(Panel):
             box = layout.box()
             box.label(text='Интерфейс UV Wall', icon='WINDOW')
             if prefs is not None:
-                box.prop(prefs, 'ui_mode', text='Режим')
+                box.label(text='Floating Pro · единый интерфейс WALL', icon='WINDOW')
                 box.label(text='Цвета и фон: ISSMAKER → Внешний вид', icon='INFO')
-                if prefs.ui_mode == 'STUDIO_DOCK':
-                    box.prop(prefs, 'dock_sizing', text='Размер Dock')
             else:
                 box.label(text='Настройки доступны в Preferences ISSMAKER')
             box = layout.box()
@@ -2587,10 +2209,8 @@ class IMA_PT_VisualSettings(Panel):
         layout.label(text='РАБОЧАЯ ОБЛАСТЬ', icon='TOOL_SETTINGS')
         self._tabs(layout, scene, 'ima_suite_tab', (
             ('ASSISTANT', 'Ассистент', 'MODIFIER'),
-            ('OPENINGS', 'Проёмы', 'MOD_SOLIDIFY'),
             ('COLLISION', 'Коллизии', 'MOD_PHYSICS'),
             ('UV_WALL', 'Стены', 'MOD_WIREFRAME'),
-            ('DWOS', 'Окна', 'WINDOW'),
             ('SETTINGS', 'Настройки', 'PREFERENCES'),
             ('DIAGNOSTICS', 'Диагностика', 'CONSOLE'),
         ))
@@ -2605,19 +2225,6 @@ class IMA_PT_VisualSettings(Panel):
             action.scale_y = 1.2
             action.operator('ima.tool_radial', text='ОТКРЫТЬ МЕНЮ ИНСТРУМЕНТОВ', icon='MODIFIER')
             layout.label(text='UV · Weld · Quick Select', icon='INFO')
-        elif section == 'OPENINGS':
-            layout.label(text='ПРОЁМЫ · Brick Hole 1.0.17', icon='MOD_SOLIDIFY')
-            self._tabs(layout, scene, 'ima_openings_tab', (
-                ('MAIN', 'Основное', 'GIZMO'),
-                ('GEOMETRY', 'UV / Мат', 'UV_DATA'),
-                ('APPEARANCE', 'Вид', 'HIDE_OFF'),
-                ('TESTS', 'Проверки', 'CHECKMARK'),
-            ))
-            layout.separator(factor=.5)
-            if scene.ima_openings_tab == 'MAIN':
-                self._openings_main(context, layout)
-            else:
-                self._openings_subsection(context, layout, scene.ima_openings_tab)
         elif section == 'COLLISION':
             layout.label(text='КОЛЛИЗИИ · Inspector 3.5.2', icon='MOD_PHYSICS')
             self._tabs(layout, scene, 'ima_collision_tab', (
@@ -2647,27 +2254,34 @@ class IMA_PT_VisualSettings(Panel):
                 self._wall_main(context, layout)
             else:
                 self._wall_subsection(context, layout, scene.ima_wall_tab)
-        elif section == 'DWOS':
-            layout.label(text='ОКНА И ДВЕРИ · DWOS 3.7.37',icon='WINDOW')
-            self._tabs(layout,scene,'ima_dwos_tab', (
-                ('MAIN','Основное','VIEW3D'),('STUDIO','DWOS Studio','PREFERENCES'),
-                ('DIAG','Диагностика','CONSOLE'),))
-            if scene.ima_dwos_tab=='MAIN': self._dwos_main(context,layout)
-            else: self._dwos_subsection(context,layout,scene.ima_dwos_tab)
         elif section == 'SETTINGS':
+            from .core import hot_reload
+            update_box=layout.box()
+            update_box.label(text='Обновления Modeling Assistant',icon='FILE_REFRESH')
+            from . import bl_info as _suite_info
+            update_box.label(text='Загружено: '+'.'.join(map(str,_suite_info['version'])))
+            state=hot_reload.status()
+            state_id=state.get('state','IDLE')
+            update_row=update_box.row(align=True)
+            update_row.enabled=state_id not in {'QUEUED','RELOADING'}
+            update_row.operator('ima.apply_update',text='ПРИМЕНИТЬ ОБНОВЛЕНИЕ',icon='FILE_REFRESH')
+            update_box.label(text='Blender и сцена остаются открыты',icon='INFO')
+            if state_id!='IDLE':
+                if state_id=='FAILED':update_box.alert=True
+                update_box.label(text=str(state.get('message',''))[:70],
+                                 icon='CHECKMARK' if state_id=='SUCCESS' else 'INFO')
             prefs = _preferences(context)
             if prefs is not None:
                 _draw_visual_preferences(layout, prefs)
             else:
                 layout.label(text='Настройки в Preferences', icon='INFO')
         elif section == 'DIAGNOSTICS':
-            state = brick_integration.status()
-            box = layout.box()
-            box.label(text='Brick Hole · 1.0.17', icon='FILE_FOLDER')
-            box.label(text='Классы: %s' % state['registered_classes'])
-            box.label(text='Preview: %s' % ('Активен' if state['preview_active'] else 'Выключен'))
-            box.label(text='DWOS 3.7.37 · модуль подключён', icon='INFO')
-            box.label(text='Reliability Foundation RF1 · общий Geometry Kernel', icon='SHIELD')
+            from .core import hot_reload
+            update=layout.box()
+            update.label(text='Обновление без перезапуска',icon='FILE_REFRESH')
+            update.operator('ima.apply_update',text='ПРИМЕНИТЬ ОБНОВЛЕНИЕ',icon='FILE_REFRESH')
+            update.label(text=str(hot_reload.status().get('message',''))[:85],icon='INFO')
+            box.label(text='Reliability Foundation RF1 · общий Geometry Kernel', icon='LOCKED')
             layout.operator('ima.diagnostics_zip', text='Собрать диагностику ZIP', icon='FILE_FOLDER')
             deep_box = layout.box()
             deep_box.label(text='PRODUCTION · DEEP AUTOLAB', icon='MOD_BUILD')
@@ -2686,9 +2300,6 @@ class IMA_PT_VisualSettings(Panel):
             deep_box.label(text='Отдельный Blender · текущая сцена не изменяется')
             deep_box.label(text='GUI-клики и Ctrl+Z — НЕ проверены', icon='INFO')
             layout.operator('ima.reliability_lab', text='RELIABILITY LAB · МАТЕМАТИКА ВСЕХ ИНСТРУМЕНТОВ', icon='CHECKMARK')
-            row = layout.row(align=True)
-            row.operator('wm.brick_hole_diagnostics_zip', text='Brick Hole ZIP', icon='FILE_FOLDER')
-            row.operator('wm.brick_hole_copy_log', text='Лог', icon='COPYDOWN')
             row = layout.row(align=True)
             row.operator('collision_inspector.diagnostics_zip', text='Collision ZIP', icon='FILE_FOLDER')
             row.operator('collision_inspector.copy_log', text='Лог коллизий', icon='COPYDOWN')
@@ -2805,7 +2416,7 @@ def _draw_context_notice(ctx):
         lines=textwrap.wrap(msg,58,break_long_words=False,break_on_hyphens=False)[:3]
         box_w=min(530,width-28);box_h=39+len(lines)*22
         x=(width-box_w)*.5;y=height-box_h-70
-        addon=ctx.preferences.addons.get('issmaker_modeling_assistant')
+        addon=ctx.preferences.addons.get(addon_key())
         theme=theme_engine.from_preferences(addon.preferences if addon else None)
         is_info=ctx.scene.ima_notice_kind=='INFO'
         role='primary' if is_info else 'warning'
@@ -2826,29 +2437,6 @@ def _draw_context_notice(ctx):
         return
 
 
-def _draw_dwos_create_action(context):
-    """Shared visual shell; native IMA_GGT_DWOSCreate still owns exact hit rect."""
-    rect=_dwos_create_rect(context)
-    if rect is None:return
-    from .appearance_gpu import Painter
-    from .core import viewport_skin, theme_engine
-    x,y,width,height,count=rect
-    item=context.preferences.addons.get('issmaker_modeling_assistant')
-    theme=theme_engine.from_preferences(item.preferences if item else None)
-    primary=viewport_skin.component('button','active','primary',theme)
-    painter=Painter()
-    try:
-        # Painted control bounds match the native Gizmo hit rectangle.
-        painter.box(x,y,width,height,primary.background,primary.border,
-                    rad=viewport_skin.control_radius('button'))
-        painter.box(x+3,y+6,3,max(0.,height-12),(*theme.accent,.95),None,rad=1.5)
-        painter.text(f'СОЗДАТЬ ОКНА  ·  {count}',x+width*.5,y+29,
-                     viewport_skin.text_px('title'),viewport_skin.control_ink(theme,part='button',state='active',role='primary'),
-                     width=width-30,align='center')
-        painter.text('DWOS · из найденных проёмов',x+width*.5,y+10,
-                     viewport_skin.text_px('caption'),viewport_skin.ink(theme,kind='muted'),
-                     width=width-30,align='center')
-    finally:painter.close()
 
 
 def _draw_tool_hud():
@@ -2861,7 +2449,7 @@ def _draw_tool_hud():
     scale = _pref(ctx, 'button_scale', 1.0)
     now = time.monotonic()
 
-    def group(name, icons, positions, active_indices=()):
+    def group(name, icons, positions, active_indices=(), size_px=34.):
         if not positions:
             return
         try: area_id = ctx.area.as_pointer(); region_id = ctx.region.as_pointer()
@@ -2872,7 +2460,7 @@ def _draw_tool_hud():
             # A lightweight hover impulse driven by native Gizmo hit testing.
             age = now - _TOOL_HOVER.get(key, -100)
             hovered = max(0.0, min(1.0, 1.0 - age / .32))
-            buttons.append((xy[0], xy[1], 34.0*scale, icon,
+            buttons.append((xy[0], xy[1], size_px*scale, icon,
                             index in active_indices, hovered))
         groups.append({'key': name, 'buttons': buttons})
 
@@ -2882,6 +2470,13 @@ def _draw_tool_hud():
             group('editor', ('UV_DATA','NODE_MATERIAL'), positions['editor'])
             group('view', VIEW_DOCK_ICONS, positions['view'],
                   ((0,) if view_tools.ucx_active() else ()))
+            if len(positions['view'])>=3:
+                pinned=quick_favorites.favorites()
+                slots=quick_favorites.quick_positions(
+                    positions['view'][2],len(pinned),ctx.region.height,scale)
+                group('favorites',
+                      tuple(quick_favorites.icon(item) for item in pinned[:len(slots)]),
+                      slots,size_px=32.)
             if _dock_count(ctx):
                 icons = ('AUTOMERGE_ON','NORMALS_FACE','MOD_WIREFRAME',
                          'MOD_SMOOTH','UV_SYNC_SELECT','LINKED')
@@ -2900,7 +2495,6 @@ def _draw_tool_hud():
             tool_hud_draw.render(groups, _accent(ctx), now=now)
         if editor == 'VIEW_3D':
             _draw_context_notice(ctx)
-            _draw_dwos_create_action(ctx)
     except Exception as exc:
         _hud_fault_once(exc)
 
@@ -2948,11 +2542,11 @@ def _issue_context_watch():
 CLASSES = (
     IMA_AddonPreferences, IMA_PT_VisualSettings,
     appearance_studio.IMA_OT_AppearanceStudio, appearance_studio.IMA_OT_AppearanceAdvanced,
-    IMA_OT_WindowVisibility, IMA_OT_WindowVisibilityToggle, IMA_OT_WindowVisibilityRestore,
+    IMA_OT_ApplyUpdate, IMA_OT_WindowVisibility, IMA_OT_WindowVisibilityToggle, IMA_OT_WindowVisibilityRestore,
     IMA_OT_ToggleUVFeedback, IMA_OT_Toggle3DFeedback,
-    IMA_MT_ViewModes, IMA_OT_ViewModePie, IMA_OT_ToolRadial, IMA_OT_NoticeEscWatcher, IMA_OT_ClearNotice, IMA_OT_LaunchTool, IMA_OT_AuditWallSeams, IMA_OT_CollisionVisibility, IMA_OT_DWOSCreateWindows, IMA_OT_DWOSCreateSession, IMA_OT_DWOSExcludeSuspicious,
+    IMA_MT_ViewModes, IMA_OT_ViewModePie, IMA_OT_ToolRadial, IMA_OT_FavoriteLaunch, IMA_OT_FavoriteRepeatShading, IMA_OT_NoticeEscWatcher, IMA_OT_ClearNotice, IMA_OT_LaunchTool, IMA_OT_AuditWallSeams, IMA_OT_CollisionVisibility,
     IMA_OT_UVAnalysisAction, IMA_OT_SwitchEditor, IMA_OT_GeometryQualityPopup,
-    IMA_GT_NavButton, IMA_GT_ToolButton, IMA_GT_DWOSCreateButton, IMA_GGT_Viewport, IMA_GGT_DWOSCreate, IMA_GGT_EditTools, IMA_GGT_IssueNavigator, IMA_GGT_EditorSplit,
+    IMA_GT_NavButton, IMA_GT_ToolButton, IMA_GGT_Viewport, IMA_GGT_EditTools, IMA_GGT_IssueNavigator, IMA_GGT_EditorSplit,
     IMA_GGT_UV, IMA_GGT_UVIssueNavigator, IMA_GGT_Shader,
     # Header buttons replace unreliable image/node Gizmo groups.
 )
@@ -2961,7 +2555,7 @@ CLASSES = (
 def register():
     global _NAV_DRAW_HANDLER, _UV_NAV_DRAW_HANDLER, _TOOL_DRAW_HANDLER, _UV_TOOL_DRAW_HANDLER, _SHADER_TOOL_DRAW_HANDLER, _HUD_DRAW_ERROR
     _HUD_DRAW_ERROR = None
-    for prop in ('ima_suite_tab', 'ima_openings_tab', 'ima_collision_tab', 'ima_wall_tab', 'ima_dwos_tab',
+    for prop in ('ima_suite_tab', 'ima_collision_tab', 'ima_wall_tab',
                   'ima_notice_message','ima_notice_tool','ima_notice_kind'):
         if hasattr(bpy.types.Scene, prop):
             raise RuntimeError('ISSMAKER: конфликт Scene.' + prop)
@@ -2969,19 +2563,11 @@ def register():
     try:
         bpy.types.Scene.ima_suite_tab = bpy.props.EnumProperty(
             name='Раздел', items=(("ASSISTANT","Ассистент","Существующие инструменты"),
-                                 ("OPENINGS","Проёмы","Brick Hole"),
                                  ("COLLISION","Коллизии","Collision Inspector"),
                                  ("UV_WALL","Стены","UV Wall Professional"),
-                                 ("DWOS","Окна","DWOS Window Core"),
                                  ("SETTINGS","Настройки","Внешний вид"),
                                  ("DIAGNOSTICS","Диагностика","Журналы и диагностика")),
-            default='OPENINGS')
-        bpy.types.Scene.ima_openings_tab = bpy.props.EnumProperty(
-            name='Проёмы', items=(("MAIN","Основное","Viewport Preview"),
-                                  ("GEOMETRY","UV","Материалы и UV"),
-                                  ("APPEARANCE","Вид","Overlay и HUD"),
-                                  ("TESTS","Тесты","Валидация и диагностика")),
-            default='MAIN')
+            default='COLLISION')
         bpy.types.Scene.ima_collision_tab = bpy.props.EnumProperty(
             name='Коллизии', items=(('MAIN','Основное','Проверка и Viewport'),
                 ('ISSUES','Проблемы','Навигация по результатам'),
@@ -2995,12 +2581,9 @@ def register():
         bpy.types.Scene.ima_wall_tab = bpy.props.EnumProperty(
             name='Стены', items=(('MAIN','Основное','Viewport Inspector'),
                 ('PARAMETERS','Параметры','Модули и геометрия'),
-                ('VIEW','Интерфейс','Studio Dock / Floating Pro'),
+                ('VIEW','Интерфейс','Floating Pro'),
                 ('LOG','Диагностика','Логи и ZIP')), default='MAIN')
 
-        bpy.types.Scene.ima_dwos_tab = bpy.props.EnumProperty(name='Окна',items=(
-            ('MAIN','Основное','Поиск и запуск'),('STUDIO','DWOS Studio','Все оригинальные настройки'),
-            ('DIAG','Диагностика','Логи и проверки')),default='MAIN')
         bpy.types.Scene.ima_notice_message = bpy.props.StringProperty(name='ISSMAKER Notice',default='',options={'SKIP_SAVE'})
         bpy.types.Scene.ima_notice_tool = bpy.props.StringProperty(name='ISSMAKER Tool',default='',options={'SKIP_SAVE'})
         bpy.types.Scene.ima_notice_kind = bpy.props.EnumProperty(name='Notice Type',items=(
@@ -3077,7 +2660,7 @@ def unregister():
             except (RuntimeError,ValueError,ReferenceError):pass
             globals()[handler_name]=None
     for prop in ('ima_notice_kind','ima_notice_tool','ima_notice_message',
-                 'ima_dwos_tab','ima_wall_tab','ima_collision_tab','ima_openings_tab','ima_suite_tab'):
+                 'ima_wall_tab','ima_collision_tab','ima_suite_tab'):
         if hasattr(bpy.types.Scene,prop):
             delattr(bpy.types.Scene,prop)
     runtime.unregister_classes_safe(CLASSES)

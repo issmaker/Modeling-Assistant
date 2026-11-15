@@ -71,17 +71,8 @@ def _stage(name, callback):
         return None
 
 
-def _disarm_dwos(kind):
-    from ..tools.dwos_windows.native import composer
-    if getattr(composer, '_ACTIVE', None) is not None:
-        composer.remove_active_draw_handler()
-        _trace('GLOBAL_UNDO_DISARM_DWOS', 'DWOS', kind)
 
 
-def _invalidate_dwos(kind):
-    from ..tools.dwos_windows.native import dwos_history
-    dwos_history.clear()
-    _trace('GLOBAL_UNDO_INVALIDATE_DWOS_HISTORY', 'DWOS', kind)
 
 
 def _invalidate_unified_nav(kind):
@@ -121,7 +112,6 @@ def _before(kind):
         return
     _EVENT_GUARD.add(key)
     try:
-        _stage('disarm_dwos', lambda: _disarm_dwos(kind))
         _PRE[kind] = _stage('capture_pre', _state)
         _stage('audit_pre', lambda: _record('PRE',kind))
     finally:
@@ -137,7 +127,6 @@ def _after(kind):
     try:
         before = _PRE.pop(kind, None)
         _stage('audit_post', lambda: _record('POST', kind, before))
-        _stage('invalidate_dwos', lambda: _invalidate_dwos(kind))
         _stage('invalidate_unified_nav', lambda: _invalidate_unified_nav(kind))
         _stage('redraw', _redraw)
     finally:

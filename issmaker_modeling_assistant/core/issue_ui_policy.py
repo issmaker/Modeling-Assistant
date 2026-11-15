@@ -13,7 +13,7 @@ LABELS = {
     'SETUP_REQUIRED': ('TOOL_SETTINGS', 'Нужна настройка', 'Проверьте входные данные или режим'),
     'INTERNAL_ERROR': ('CANCEL', 'Ошибка ISSMAKER', 'Ошибка инструмента, не пользовательской геометрии'),
 }
-SOURCE_IDS = frozenset(('ALL', 'RELIABILITY', 'BRICK_HOLE', 'UV_SEAMS', 'COLLISION'))
+SOURCE_IDS = frozenset(('ALL', 'RELIABILITY', 'COLLISION'))
 KIND_IDS = frozenset(('ALL', 'PROVEN_INVALID', 'WARNING', 'REVIEW', 'UNCERTAIN', 'OTHER'))
 
 

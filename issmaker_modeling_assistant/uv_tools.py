@@ -63,15 +63,20 @@ def _uv_editor_visible(context):
 def _selection_source(context, requested='AUTO'):
     settings = context.tool_settings
     if requested == 'UV':
-        if settings.use_uv_select_sync:
-            raise UVSelectionError(
-                "UV Sync Selection включён: используйте Mesh или отключите синхронизацию")
+        # Blender 5+ retains genuine per-corner UV flags in Sync mode.
+        if settings.use_uv_select_sync and not hasattr(bmesh.types.BMLoop, 'uv_select_vert'):
+            raise UVSelectionError("В Blender 4.x отключите UV Sync Selection")
         return 'UV'
     if requested == 'MESH':
         return 'MESH'
-    # With independent UV selection, never silently use broader 3D mesh selection.
-    return ('UV' if not settings.use_uv_select_sync and _uv_editor_visible(context)
-            else 'MESH')
+    # UV Editor actions are strictly UV-scoped.  A synchronized selection
+    # cannot distinguish UV loops from the broader mesh selection; refuse
+    # instead of accidentally changing unselected islands.
+    if _uv_editor_visible(context):
+        if settings.use_uv_select_sync and not hasattr(bmesh.types.BMLoop, 'uv_select_vert'):
+            raise UVSelectionError("Blender 4.x: отключите UV Sync Selection")
+        return 'UV'
+    return 'MESH'
 
 
 def _target_faces(bm, purpose, context, uv_layer, requested='AUTO'):
@@ -83,6 +88,11 @@ def _target_faces(bm, purpose, context, uv_layer, requested='AUTO'):
     else:
         if uv_layer is None:
             raise UVSelectionError(f"{purpose}: активная UV-карта отсутствует")
+        sample=next((loop for face in bm.faces for loop in face.loops),None)
+        if sample is not None and not selection_core.uv_selection_supported(sample, uv_layer):
+            raise UVSelectionError(
+                f'{purpose}: Blender не предоставляет независимое UV-выделение через BMesh. '
+                'Включите UV Sync Selection либо запустите с областью «Только Mesh».')
         mode = getattr(context.tool_settings, "uv_select_mode", 'VERTEX')
         faces, partial = selection_core.selected_uv_faces(bm, uv_layer, mode)
         if partial:
@@ -320,6 +330,50 @@ def _scale_island_to_safe_bounds(island, uv_layer, margin):
         loop[uv_layer].uv = target + (loop[uv_layer].uv - center) * scale
 
 
+def stage_generated_glass_uv(obj, *, resolution=4096):
+    """Prepare UV for generated shared tool Glass with this UV Editor tool's policy.
+
+    Smart UV angle 0 effectively yields separate non-coplanar islands. Here
+    each source face is first projected into its best world-up plane; then
+    EXACTLY the same island connectivity, upright orientation and centering
+    helpers as `ima.unwrap_glass` are applied. The original UV Editor operator
+    keeps its native Smart UV transaction; no edit-mode/context switching is
+    permitted inside the shared tool generation pipeline.
+
+    Returns UV per polygon/loop. Does not edit a Mesh, Scene or selection.
+    """
+    import bmesh
+    mesh=obj.data
+    if obj.type!='MESH' or len(mesh.polygons)==0:
+        raise UVSelectionError('Развёртка стекла: ожидается непустой Mesh')
+    bm=bmesh.new()
+    try:
+        bm.from_mesh(mesh)
+        bm.faces.ensure_lookup_table()
+        bm.faces.index_update()
+        bm.normal_update()
+        layer=bm.loops.layers.uv.verify()
+        for face in bm.faces:
+            axis_u,axis_v=_world_alignment_axes(obj,[face])
+            for lp in face.loops:
+                world=obj.matrix_world@lp.vert.co
+                lp[layer].uv=(world.dot(axis_u),world.dot(axis_v))
+        islands=_selected_uv_islands(list(bm.faces),layer)
+        margin_pixels=24 if int(resolution)==2048 else 48
+        margin=margin_pixels/float(resolution)
+        for island in islands:
+            _align_island_to_world_up(obj,island,layer)
+            _scale_island_to_safe_bounds(island,layer,margin)
+        faces=[[tuple(float(v) for v in lp[layer].uv) for lp in f.loops]
+               for f in bm.faces]
+        assert len(faces)==len(mesh.polygons)
+        return {'uv_faces':faces,'island_count':len(islands),
+                'margin_pixels':margin_pixels,'resolution':int(resolution),
+                'policy':'IMA_UNWRAP_GLASS_WORLD_UP_0_DEGREES'}
+    finally:
+        bm.free()
+
+
 def _selection_snapshot(bm, uv_layer):
     """No BMesh element references survive Blender operator boundaries."""
     bm.verts.ensure_lookup_table()
@@ -340,9 +394,10 @@ def _selection_snapshot(bm, uv_layer):
         "vertices": frozenset(v.index for v in bm.verts if v.select),
         "edges": frozenset(e.index for e in bm.edges if e.select),
         "faces": frozenset(f.index for f in bm.faces if f.select),
-        "uv": tuple(tuple((bool(l[uv_layer].select),
-                           bool(getattr(l[uv_layer], 'select_edge', False)))
+        "uv": tuple(tuple(selection_core.uv_flags(l, uv_layer)
                           for l in f.loops) for f in bm.faces),
+        "uv_faces": tuple(selection_core.uv_face_flag(f, uv_layer)
+                          for f in bm.faces),
         "active_face": bm.faces.active.index if bm.faces.active else None,
         "history": history,
     }
@@ -356,17 +411,15 @@ def _prepare_smart_uv_selection(bm, target_indexes, uv_layer):
         edge.select = False
     for face in bm.faces:
         face.select = False
+        selection_core.set_uv_face_flag(face, uv_layer, False)
         for loop in face.loops:
-            loop[uv_layer].select = False
-            if hasattr(loop[uv_layer], "select_edge"):
-                loop[uv_layer].select_edge = False
+            selection_core.set_uv_flags(loop, uv_layer, False, False)
     for index in target_indexes:
         face = bm.faces[index]
         face.select_set(True)
+        selection_core.set_uv_face_flag(face, uv_layer, True)
         for loop in face.loops:
-            loop[uv_layer].select = True
-            if hasattr(loop[uv_layer], "select_edge"):
-                loop[uv_layer].select_edge = True
+            selection_core.set_uv_flags(loop, uv_layer, True, True)
     bm.select_flush_mode()
 
 
@@ -382,10 +435,10 @@ def _restore_mesh_selection(bm, snapshot, uv_layer):
         saved = snapshot["uv"][face.index]
         if len(face.loops) != len(saved):
             raise GeometryChangedError("UV-топология изменилась при развёртке")
+        selection_core.set_uv_face_flag(
+            face, uv_layer, snapshot.get("uv_faces", (False,) * len(bm.faces))[face.index])
         for loop, (select, select_edge) in zip(face.loops, saved):
-            loop[uv_layer].select = select
-            if hasattr(loop[uv_layer], 'select_edge'):
-                loop[uv_layer].select_edge = select_edge
+            selection_core.set_uv_flags(loop, uv_layer, select, select_edge)
     bm.faces.active = (bm.faces[snapshot["active_face"]]
                        if snapshot["active_face"] is not None else None)
     try:
@@ -608,9 +661,14 @@ class IMA_OT_SetTexelDensity(Operator):
 
     resolution: bpy.props.EnumProperty(
         name="Размер текстуры",
-        items=(('2048', "2K — 2048 px", "Использовать текстуру 2048×2048"),
-               ('4096', "4K — 4096 px", "Использовать текстуру 4096×4096")),
+        items=(('2048', "2K — фактура 2000 px", "Полезные 2000 px текстуры 2K"),
+               ('4096', "4K — фактура 4000 px", "Полезные 4000 px текстуры 4K")),
         default='4096',
+    )
+    px_per_meter: bpy.props.IntProperty(
+        name="Тексель, px/m",
+        description="Полезная плотность выбранных UV-островов в px/m",
+        default=1000, min=512, max=1706,
     )
 
     @classmethod
@@ -618,14 +676,18 @@ class IMA_OT_SetTexelDensity(Operator):
         return bool(_active_edit_mesh(context))
 
     def invoke(self, context, event):
-        return context.window_manager.invoke_props_dialog(self, width=320)
+        # Direct UV clicks preserve 1000 px/m; Shift opens the exact editor.
+        # Long-press gesture must be verified in interactive Blender separately.
+        if getattr(event, "shift", False):
+            return context.window_manager.invoke_props_dialog(self, width=340)
+        return self.execute(context)
 
     def draw(self, context):
-        self.layout.label(text="Только выбранные полигоны", icon='RESTRICT_SELECT_OFF')
-        self.layout.prop(self, "selection_source")
+        self.layout.label(text="Только UV-острова из UV Editor", icon='UV_DATA')
+        self.layout.prop(self, "px_per_meter")
         self.layout.prop(self, "resolution", expand=True)
-        self.layout.label(text="Только полные UV-острова", icon='INFO')
-        self.layout.label(text="Неполный остров: отказ без изменения выделения")
+        self.layout.prop(self, "selection_source")
+        self.layout.label(text="Неполное UV-выделение — отказ без изменения")
 
     @runtime.protected("texel_density", cooldown=0.5)
     def execute(self, context):
@@ -637,7 +699,9 @@ class IMA_OT_SetTexelDensity(Operator):
                 context, purpose, selection_source=self.selection_source,
                 require_complete_islands=True)
             islands = _selected_uv_islands(faces, uv)
-            resolution = float(self.resolution)
+            # Textures are 2048/4096, but the usable painted zones are
+            # 2000/4000 px: a strict 1000 px/m refers to the painted area.
+            resolution = 2000.0 if self.resolution == '2048' else 4000.0
             unit_scale = max(context.scene.unit_settings.scale_length, EPS)
             changed = 0
             for island in islands:
@@ -651,7 +715,7 @@ class IMA_OT_SetTexelDensity(Operator):
                 if current <= EPS or not math.isfinite(current):
                     skipped += 1
                     continue
-                scale = 1000.0 / current
+                scale = float(self.px_per_meter) / current
                 center = sum((loop[uv].uv.copy() for loop in loops), Vector((0.0, 0.0))) / len(loops)
                 transaction.mutation_started = True
                 for loop in loops:
@@ -660,8 +724,8 @@ class IMA_OT_SetTexelDensity(Operator):
             if not changed:
                 raise UVSelectionError("Texel Density: выбранные острова имеют нулевую площадь")
             _finish_uv_operation(obj, transaction, bm, before, purpose)
-            log.write(f"Texel density SAFE: object={obj.name}; faces={len(faces)}; resolution={self.resolution}; islands={changed}; skipped={skipped}; geometry_unchanged=true")
-            text = f"1000 px/m: островов {changed}"
+            log.write(f"Texel density SAFE: object={obj.name}; faces={len(faces)}; resolution={self.resolution}; effective_px={resolution}; target={self.px_per_meter}; islands={changed}; skipped={skipped}; geometry_unchanged=true")
+            text = f"{self.px_per_meter} px/m: островов {changed}"
             if skipped:
                 text += f"; пропущено {skipped}"
             self.report({'INFO'}, text)
@@ -727,7 +791,10 @@ class IMA_OT_UnwrapGlass(Operator):
         purpose = "Развёртка стекла"
         transaction = None
         try:
-            obj, transaction, bm, faces, uv, before = _begin_uv_operation(context, purpose, require_uv=False, selection_source=self.selection_source)
+            obj, transaction, bm, faces, uv, before = _begin_uv_operation(
+                context, purpose, require_uv=True,
+                selection_source=self.selection_source,
+                require_complete_islands=True)
             if uv is None:
                 uv = bm.loops.layers.uv.verify()
             bm.verts.ensure_lookup_table()
@@ -802,8 +869,94 @@ class IMA_OT_UnwrapGlass(Operator):
             runtime.release(key)
 
 
+class IMA_OT_MoveSelectedUVToUDIM(Operator):
+    bl_idname = "ima.uv_move_to_udim"
+    bl_label = "Перенести выбранные UV-острова в UDIM"
+    bl_description = (
+        "Только полностью выделенные острова в UV Editor; сохранить форму, "
+        "размер, относительное расположение и все невыбранные UV")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    tile: bpy.props.IntProperty(
+        name="UDIM назначения",
+        description="Номер плитки назначения, начиная с 1001",
+        default=1002, min=1001, max=2000,
+    )
+
+    @classmethod
+    def poll(cls, context):
+        return bool(_active_edit_mesh(context) and
+                    context.area and context.area.type == 'IMAGE_EDITOR')
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self, width=310)
+
+    def draw(self, context):
+        layout = self.layout
+        layout.prop(self, "tile")
+        layout.label(text="Только выбранные UV-острова", icon='UV_DATA')
+        layout.label(text="Форма и тексель сохраняются; другие UV не меняются")
+
+    @runtime.protected("uv_move_to_udim")
+    def execute(self, context):
+        transaction = None
+        purpose = "Перенос выбранных UV в UDIM"
+        try:
+            obj, transaction, bm, faces, uv, before = _begin_uv_operation(
+                context, purpose, selection_source='UV',
+                require_complete_islands=True)
+            islands = _selected_uv_islands(faces, uv)
+            num = int(self.tile) - 1001
+            target_u, target_v = num % 10, num // 10
+            offsets = []
+            for island in islands:
+                loops = _island_loops(island)
+                us = [float(loop[uv].uv.x) for loop in loops]
+                vs = [float(loop[uv].uv.y) for loop in loops]
+                if not us or not vs:
+                    raise UVSelectionError("Пустой UV-остров")
+                center_u = (min(us) + max(us)) * 0.5
+                center_v = (min(vs) + max(vs)) * 0.5
+                source_u, source_v = math.floor(center_u), math.floor(center_v)
+                tolerance = 1.0e-6
+                if (min(us) < source_u - tolerance or
+                        max(us) > source_u + 1.0 + tolerance or
+                        min(vs) < source_v - tolerance or
+                        max(vs) > source_v + 1.0 + tolerance):
+                    raise UVSelectionError(
+                        "UV-остров пересекает границы плиток; "
+                        "перенос без деформации невозможен")
+                offsets.append((loops,Vector((
+                    float(target_u - source_u),
+                    float(target_v - source_v)))))
+            for loops, shift in offsets:
+                if shift.length_squared <= EPS:
+                    continue
+                transaction.mutation_started = True
+                for loop in loops:
+                    loop[uv].uv += shift
+            _finish_uv_operation(obj, transaction, bm, before, purpose)
+            log.write(
+                f"UDIM move SAFE: target={self.tile}; object={obj.name}; "
+                f"islands={len(islands)}; unselected_uv_unchanged=true")
+            self.report({'INFO'},
+                f"Перенесено островов: {len(islands)} → UDIM {self.tile}")
+            return {'FINISHED'}
+        except UVSelectionError as exc:
+            restored = _cancel_transaction(transaction, exc)
+            self.report({'WARNING'}, str(exc) +
+                ("; исходная сетка восстановлена" if restored else ""))
+            return {'CANCELLED'}
+        except Exception as exc:
+            restored = _cancel_transaction(transaction, exc)
+            log.write_exception("UDIM move failed", exc)
+            self.report({'ERROR'}, str(exc) +
+                ("; исходная сетка восстановлена" if restored else ""))
+            return {'CANCELLED'}
+
+
 CLASSES = (IMA_OT_SelectionScope, IMA_OT_UVAlign, IMA_OT_SetTexelDensity,
-           IMA_OT_UnwrapGlass)
+           IMA_OT_UnwrapGlass, IMA_OT_MoveSelectedUVToUDIM)
 
 
 def register():

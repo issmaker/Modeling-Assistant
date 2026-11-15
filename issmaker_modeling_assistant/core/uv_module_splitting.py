@@ -1,4 +1,4 @@
-"""Pass15.19: conservative 4m/2m tile planning for *planar DWOS glazing*.
+"""Pass15.19: conservative 4m/2m tile planning for *planar architectural glazing*.
 
 Pure Python. Only a whole axis-aligned XY quad per independent glass sheet is
 eligible for topology-safe UV tessellation. This does not split panes into
@@ -10,7 +10,7 @@ from collections import Counter
 from math import isfinite
 from .generation_uv_quality import stage_face_uvs
 
-SCHEMA = 'DWOS_PLANAR_GLASS_UV_PATCHES_V1'
+SCHEMA = 'ISSMAKER_PLANAR_GLASS_UV_PATCHES_V1'
 MAX_PATCHES = 2048
 _TOL = 1.e-7
 

@@ -28,14 +28,6 @@ _LIMIT = 128
 _PEER_LEASE_SECONDS = 2.5
 
 TITLES = {
-    'DWOS_COMPOSER': 'DWOS · Studio',
-    'DWOS_ZONE_POPUP': 'DWOS · Разделение зон',
-    'DWOS_SPLIT_POPUP': 'DWOS · Редактор разделения',
-    'DWOS_MULLION_EDIT': 'DWOS · Импост',
-    'DWOS_ALIGN_SPLITS': 'DWOS · Выравнивание',
-    'BRICK_HOLE_PREVIEW': 'Brick Hole · Интерактивный HUD',
-    'BRICK_FIXTURE_NAV': 'Brick Hole · Навигатор',
-    'BRICK_ISSUE_CARD': 'Brick Hole · Пересечения',
     'UV_WALL_RESOURCE_PICKER': 'UV Wall · Выбор ресурсов',
     'COLLISION_GROUP_MENU': 'Collision · Фильтр проблем',
     'COLLISION_INFO_CARD': 'Collision · Информационная карточка',

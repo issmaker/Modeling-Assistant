@@ -53,7 +53,7 @@ def step_metre_text(text, direction, *, increment='0.001', signed=False,
 
 
 def depth_field_rects(left,bottom):
-    """Canonical unscaled Brick Hole field, with non-overlapping +/- buttons."""
+    """Canonical unscaled numeric field, with non-overlapping +/- buttons."""
     l=float(left); b=float(bottom)
     return {'value_hit': (l+7.,b+38.,l+209.,b+65.),
             'depth_minus': (l+214.,b+38.,l+239.,b+65.),

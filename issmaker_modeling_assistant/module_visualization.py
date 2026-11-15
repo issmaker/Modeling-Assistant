@@ -335,7 +335,7 @@ def _any_active_mesh(context):
 
 
 def uv_quality_summary(context, *, detailed=False):
-    """Read-only: available for ANY active Mesh, including DWOS and Brick Hole."""
+    """Read-only: available for ANY active Mesh, including shared modeling tools."""
     obj = _any_active_mesh(context)
     if obj is None:
         raise ValueError('Проверка UV доступна для выбранного Mesh в Object Mode')
@@ -357,7 +357,7 @@ def uv_quality_summary(context, *, detailed=False):
                       'uv':tuple(tuple(data[i].uv) for i in loops),
                       'triangles':render_uv.get(poly.index,())})
     summary = audit_uv_islands(faces)
-    # One common read-only oracle for UV Wall, DWOS, Brick Hole and any Mesh.
+    # One common read-only oracle for UV Wall, shared tool and any Mesh.
     # UV winding is not a face-normal verdict or a material defect verdict.
     from .core.surface_orientation import face_orientation, mirrored_transform
     matrix3 = obj.matrix_world.to_3x3()
@@ -458,7 +458,22 @@ class IMA_OT_UVQualityReport(Operator):
     def execute(self, context):
         try:
             obj, layer, summary = uv_quality_summary(context, detailed=True)
-            result=(f"{obj.name} [{layer.name}]: островов {summary['islands']}, "
+            from .core.uv_flip_v2 import analyze_mesh_uv
+            v2=analyze_mesh_uv(obj.data)
+            issues=v2['issues']
+            reasons={}
+            for codes in issues.values():
+                for code in codes:
+                    reasons[code]=reasons.get(code,0)+1
+            result=(f"UV FLIP V2 {obj.name} [{layer.name}]: "
+                    f"локальных flip {len(v2['local_flip_faces'])}, "
+                    f"self-crossing {reasons.get('SELF_CROSSING_FACE',0)}, "
+                    f"вырожденных {reasons.get('DEGENERATE_FACE',0)}, "
+                    f"внутриостровных наложений {len(v2['overlap_pairs'])}, "
+                    f"зеркальных островов (справочно) {v2['mirrored_islands_advisory']}, "
+                    f"неоднозначных островов {v2['unresolved_islands']}, "
+                    f"статус {'COMPLETE' if v2['complete'] else 'INCOMPLETE_BUDGET'}; "
+                    f"островов по старому аудиту {summary['islands']}, "
                     f"зеркальных {summary['mirrored_islands']}, смешанных {summary['mixed_islands']}, "
                     f"вырожденных граней {summary['degenerate_faces']}, "
                     f"неоднозначных UV-граней {summary['unverified_faces']}, "
@@ -468,9 +483,13 @@ class IMA_OT_UVQualityReport(Operator):
                     f"проверенных кандидатов исправления {summary['repairable_islands']}; "
                     f"роль-зависимые нормали NOT_VERIFIED")
             log.write('UV_QUALITY_AUDIT '+result)
-            self.report({'WARNING'} if summary['unverified_faces'] or
-                        summary['virtual_twisted_faces'] or summary['virtual_uv_fold_faces']
-                        else {'INFO'}, result[:255]); return {'FINISHED'}
+            log.write('UV_FLIP_V2_CAUSES examples='+str(
+                list(issues.items())[:100])
+                +'; overlap_examples='+str(v2['overlap_pairs'][:100]))
+            alert=bool(issues or not v2['complete'] or
+                summary['virtual_twisted_faces'] or summary['virtual_uv_fold_faces'])
+            self.report({'WARNING'} if alert else {'INFO'},
+                        result[:255]); return {'FINISHED'}
         except (ValueError, RuntimeError, ReferenceError, AttributeError, IndexError) as exc:
             self.report({'WARNING'}, str(exc)[:240]); return {'CANCELLED'}
 
@@ -482,7 +501,26 @@ class IMA_OT_UVFixMirroredIslands(Operator):
                       'островов в пределах одного UDIM. Не исправляет смешанные/перекрывающиеся острова')
     bl_options = {'REGISTER', 'UNDO'}
 
+    confirm_entire_mirror: bpy.props.BoolProperty(
+        name="Я намеренно отражаю целые острова",
+        description=("Направление UV-обхода НЕ является доказательством ошибки. "
+                     "Этот оператор выполняет ручное зеркалирование выбранных кандидатов"),
+        default=False)
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self, width=420)
+
+    def draw(self, context):
+        self.layout.label(text="Это НЕ автоматическое исправление UV Flip!", icon='ERROR')
+        self.layout.label(text="Целиком зеркальные UV-острова могут быть корректными.")
+        self.layout.prop(self, "confirm_entire_mirror")
+
     def execute(self, context):
+        if not self.confirm_entire_mirror:
+            self.report({'WARNING'},
+                "Зеркальный остров — не доказанный дефект. "
+                "Требуется явное подтверждение ручного отражения.")
+            return {'CANCELLED'}
         try:
             obj, layer, summary = uv_quality_summary(context)
             _require_unique_mesh(obj)
@@ -532,6 +570,79 @@ class IMA_OT_UVFixMirroredIslands(Operator):
         log.write(f'UV_QUALITY_REPAIR object={obj.name!r} islands={changed} loops={len(modified)}')
         self.report({'INFO'}, f'Исправлено UV-островов: {changed}. Undo доступен.')
         return {'FINISHED'}
+
+
+class IMA_OT_UVFixLocalFlip(Operator):
+    bl_idname = "ima.uv_fix_local_flip"
+    bl_label = "Исправить подтверждённый локальный UV Flip"
+    bl_description = (
+        "Исправляет только один доказанный UV-треугольник по общей стороне; "
+        "не отражает целые острова и не меняет соседние UV")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    face_index: bpy.props.IntProperty(
+        name="Полигон", description="Индекс подтверждённого полигона; -1 означает один доступный кандидат",
+        default=-1, min=-1)
+
+    @classmethod
+    def poll(cls, context):
+        return _any_active_mesh(context) is not None
+
+    def execute(self, context):
+        from .core.uv_flip_v2 import mesh_uv_faces, analyze_mesh_uv
+        from .core.uv_flip_repair import propose_single_face_fix, UnsafeUVFix
+        try:
+            obj=_any_active_mesh(context)
+            if obj is None:
+                raise UnsafeUVFix("Нужен активный Mesh в Object Mode")
+            _require_unique_mesh(obj)
+            mesh=obj.data
+            if len(mesh.polygons)>50000:
+                raise UnsafeUVFix(
+                    "Для больших Mesh используйте изолированный UV-аудит; "
+                    "автоисправление ограничено 50000 гранями")
+            layer=mesh.uv_layers.active
+            if layer is None:
+                raise UnsafeUVFix("Нет активной UV-карты")
+            faces=mesh_uv_faces(mesh)
+            proposal=propose_single_face_fix(
+                faces,None if self.face_index<0 else int(self.face_index))
+            face_index=proposal["face"]
+            polygon=mesh.polygons[face_index]
+            indices=tuple(polygon.loop_indices)
+            if len(indices)!=3:
+                raise UnsafeUVFix("Исправление доступно только для треугольника")
+            corner=proposal["changed_corner"]
+            loop=indices[corner]
+            original_uv=tuple(layer.data[loop].uv)
+            new_uv=proposal["new_uv"][corner]
+            if sum(abs(a-b) for a,b in zip(original_uv,new_uv))<1.e-10:
+                raise UnsafeUVFix("Нулевое изменение UV; операция отменена")
+            # The only write is one UV-loop corner. Every other face stays
+            # byte-for-byte unchanged, including adjacent shared UV endpoints.
+            try:
+                layer.data[loop].uv=new_uv
+                mesh.update()
+                validation=analyze_mesh_uv(mesh)
+                if not validation['complete'] or face_index in validation['issues']:
+                    raise UnsafeUVFix(
+                        "После исправления остаётся UV-дефект; изменения отменены")
+            except Exception:
+                layer.data[loop].uv=original_uv
+                mesh.update()
+                raise
+            clear()
+            log.write(
+                f"UV_FLIP_LOCAL_SAFE_REPAIR object={obj.name!r} face={face_index}; "
+                f"corner={corner}; neighbor={proposal['neighbor']}; "
+                "other_faces_unchanged=true; geometry_unchanged=true")
+            self.report({'INFO'},
+                f"Исправлен UV flip: грань {face_index}, угол {corner}; "
+                "остальные UV не тронуты. Ctrl+Z доступен.")
+            return {'FINISHED'}
+        except (UnsafeUVFix,ValueError,RuntimeError,AttributeError,IndexError) as exc:
+            self.report({'WARNING'},str(exc)[:240])
+            return {'CANCELLED'}
 
 
 class IMA_OT_WallNativeAngleSmooth(Operator):
@@ -658,7 +769,8 @@ class IMA_OT_ModuleCoverageReport(Operator):
 
 
 CLASSES = (IMA_OT_ModuleOverlay, IMA_OT_ModuleMarkSeams, IMA_OT_ModuleShading,
-           IMA_OT_UVQualityReport, IMA_OT_RoleSurfaceReport, IMA_OT_UVFixMirroredIslands,
+           IMA_OT_UVQualityReport, IMA_OT_RoleSurfaceReport,
+           IMA_OT_UVFixMirroredIslands, IMA_OT_UVFixLocalFlip,
            IMA_OT_WallNativeAngleSmooth, IMA_OT_ModuleCoverageReport)
 
 

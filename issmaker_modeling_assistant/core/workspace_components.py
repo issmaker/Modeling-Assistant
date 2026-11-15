@@ -40,8 +40,16 @@ def _resolve(part, state, role, panel, header, border, accent, subtitle):
     else: ink = accent
     # Neutral panels are deliberately matte: decorative patterns stay behind
     # opaque text fields, rather than washing out essential labels.
-    surface = mix_color((*panel, 1.), (*header, 1.), .40 if part in {'field','header'} else .23)
-    outline = (*border, .88)
+    surface = mix_color((*panel,1.),(*header,1.),
+                        .46 if part in {'field','header'} else .32)
+    # Cards/buttons must be distinguishable against the current panel even
+    # when the selected accent is black. Lift by theme-relative luminance;
+    # never introduce an unrelated fixed chromatic palette.
+    if part in {'button','tab','field','card'}:
+        lift={'button':.028,'tab':.026,'field':.032,'card':.016}[part]
+        surface=tuple(min(1.,surface[i]+lift) for i in range(3))+(surface[3],)
+    surface = mix_color(surface, (*accent,1.), .035 if part!='field' else .017)
+    outline = mix_color((*border, .95), (*accent,1.), .08)
     selected = state in {'active','focused'}
     hover = state == 'hover'
     if state == 'disabled':

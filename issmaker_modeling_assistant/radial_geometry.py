@@ -14,10 +14,10 @@ MODES = (
 
 # Tool slots come from the shared registry; adding a module does not change the HUD.
 from .core.registry import MENU_TOOLS
-TOOL_MODES = tuple((spec.tool_id, {'BRICK_HOLE':'Openings','DWOS':'Windows\n& Doors','COLLISION':'Collisions','UV_WALL':'Walls'}[spec.tool_id], spec.icon) for spec in MENU_TOOLS)
+TOOL_MODES = tuple((spec.tool_id, {'COLLISION':'Collisions','UV_WALL':'Walls'}[spec.tool_id], spec.icon) for spec in MENU_TOOLS)
 DISABLED_TOOL_IDS = frozenset(spec.tool_id for spec in MENU_TOOLS if not spec.enabled)
 
-# Quick Select retains eight wedges. Tools use four generous 90-degree sectors.
+# Quick Select retains eight wedges. Tool wedges follow registry size.
 QUICK_MODES = (
     ('UV', 'UV', 'UV'),
     ('UDIM', 'UDIM', 'UDIM'),
@@ -38,9 +38,9 @@ def radial_scale(width, height, button_scale=1.0):
 
 
 def polar_pick(dx, dy, scale=1.0, sectors=8):
-    """Return 0..sectors-1, center -2 or outside -1; 4 tools, 8 view/quick."""
-    if sectors not in (4, 5, 8):
-        raise ValueError("Supported wheel sectors: 4, 5 or 8")
+    """Return 0..sectors-1, center -2 or outside -1; current tools, 8 view/quick."""
+    if sectors not in (2, 3, 4, 5, 8):
+        raise ValueError("Supported wheel sectors: 2, 3, 4, 5 or 8")
     r = hypot(dx, dy)
     if r <= 42.0*scale:
         return -2
@@ -49,7 +49,7 @@ def polar_pick(dx, dy, scale=1.0, sectors=8):
     # Segment zero at top; progress clockwise.
     angle = (pi/2 - atan2(dy, dx)) % (2*pi)
     step = 2*pi/sectors
-    if sectors in (4,5) and abs(((angle + step/2) % step) - step/2) > step/2 - .042:
+    if sectors in (2,3,4,5) and abs(((angle + step/2) % step) - step/2) > step/2 - .042:
         return -1
     return int((angle + step/2) // step) % sectors
 
@@ -75,9 +75,30 @@ def ease_out(t):
 
 
 def appearance_pick(dx,dy,scale=1.):
-    """Separate lower settings chip: does not replace any of four tool wedges."""
+    """Separate lower settings chip; remains outside tool heart hitboxes."""
     return (-161.*scale <= dx <= -7.*scale and -220.*scale <= dy <= -173.*scale)
 
 
 def geometry_pick(dx,dy,scale=1.):
     return (7.*scale <= dx <= 161.*scale and -220.*scale <= dy <= -173.*scale)
+
+
+def favorite_point(index,scale=1.):
+    """Center of an external heart, never overlapping normal polar sectors."""
+    if index not in range(len(TOOL_MODES)):
+        raise ValueError("FAVORITE_INDEX_OUT_OF_RANGE")
+    if len(TOOL_MODES)==2 and index==1:
+        # The bottom two-sector heart must not overlap either settings chip.
+        # Its 13.5 px visible radius also clears the 157 px wheel hit boundary.
+        return (85.*scale, -153.*scale)
+    radius=162. if index==2 else 177.
+    return point_for(index,radius,scale,sectors=len(TOOL_MODES))
+
+
+def favorite_pick(dx,dy,scale=1.):
+    """Hit hearts before sectors/chips. Only the available tool slots qualify."""
+    for index in range(len(TOOL_MODES)):
+        x,y=favorite_point(index,scale)
+        if (dx-x)**2+(dy-y)**2 <=(12.*scale)**2:
+            return index
+    return -1
