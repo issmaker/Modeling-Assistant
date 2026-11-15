@@ -29,7 +29,7 @@ class ShellZones:
 
 
 def spec(kind='editor', *, scale=1., compact=False):
-    """Visual metrics across DWOS/UV Wall/Collision/Brick Hole.
+    """Visual metrics across shared tool/UV Wall/Collision.
 
     Header defaults remain compatible with already painted modal widgets;
     the shell never independently defines or changes click targets.

@@ -5,6 +5,7 @@ The core generates bounded feather triangles; BLENDER GPU errors fall back to
 original UNIFORM_COLOR line drawing in the caller. No redraw timer is created.
 """
 from __future__ import annotations
+from .extension_compat import addon_key
 from .core import hud_quality
 
 _LAST_ERROR = None
@@ -17,7 +18,7 @@ def draw_aa_border(points,rgba,rect,*,width=.85,fringe=.85,closed=False):
     # Respect a user's PERFORMANCE preset. Do not force expensive AA strokes.
     try:
         import bpy
-        item=bpy.context.preferences.addons.get('issmaker_modeling_assistant')
+        item=bpy.context.preferences.addons.get(addon_key())
         if item is not None and getattr(item.preferences,'ui_render_quality','HIGH')=='PERFORMANCE':
             return False
     except (ImportError,AttributeError,RuntimeError,ReferenceError):pass

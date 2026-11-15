@@ -55,24 +55,6 @@ def run_lab():
         return {'edge_only':True,'same_side_overlap_rejected':True}
     case('COLLISION_SHARED_EDGE_PROOF',collision_shared)
 
-    def dwos_validation():
-        from ...tools.dwos_windows.native.validation import validate_window_decisions
-        class S:
-            def __init__(self,axis,position,thickness):self.axis=axis;self.position=position;self.thickness=thickness
-        rows=validate_window_decisions(4,3,.08,.2,[S('V',0,.05),S('V',1,.05)])
-        assert not any(r.kind=='PROVEN_INVALID' for r in rows),[r.as_dict() for r in rows]
-        return {'decisions':[r.as_dict() for r in rows]}
-    case('DWOS_DECISION_ADAPTER',dwos_validation)
-
-    def dwos_spatial():
-        from ...tools.dwos_windows.native.spatial_safety_core import triangles_intersect
-        v1=[(0,0,0),(2,0,0),(0,2,0)];v2=[(.5,.5,-1),(.5,.5,1),(1.5,.5,0)]
-        assert triangles_intersect(v1,(0,1,2),v2,(0,1,2))
-        v3=[(0,0,1e-7),(2,0,1e-7),(0,2,1e-7)]
-        assert not triangles_intersect(v1,(0,1,2),v3,(0,1,2))
-        return {'cross':True,'parallel_near_miss':False}
-    case('DWOS_SPATIAL_EXACT_HARD_PHASE',dwos_spatial)
-
     def uvwall_planar():
         from ...tools.uv_wall.UV_Wall_Professional.production.planar_integrity import signed_area,interior_side
         base=[(0,0),(4,0),(4,4),(0,4),(0,0)]
@@ -81,12 +63,6 @@ def run_lab():
         assert interior_side(shifted)=='LEFT'
         return {'area':signed_area(shifted),'side':interior_side(shifted)}
     case('UVWALL_PLANAR_TRANSLATION',uvwall_planar)
-
-    def brick_wrapper():
-        from ...tools.brick_hole.robust_predicates import exact_segment_contact_3d as fn
-        assert fn((0,0,0),(1,0,0),(.5,-1,0),(.5,1,0))
-        return {'shared_core':True}
-    case('BRICK_HOLE_SHARED_CORE',brick_wrapper)
 
     passed=sum(r['status']=='PASS' for r in rows)
     return {'schema':'ISSMAKER_RELIABILITY_LAB_V1','architecture':architecture_snapshot(),

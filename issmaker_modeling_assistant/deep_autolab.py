@@ -92,7 +92,7 @@ class IMA_OT_DeepAutoLab(Operator):
     bl_idname = 'ima.deep_autolab'
     bl_label = 'DEEP AUTOLAB · СЛОЖНЫЕ ТЕСТЫ → ZIP'
     bl_description = ('Одна кнопка: изолированный Blender запускает реальные сложные тесты WALL, '
-                      'DWOS, Collision, Reliability; сохраняет ошибки, фикстуры и ZIP, не трогая проект')
+                      'shared tool, Collision, Reliability; сохраняет ошибки, фикстуры и ZIP, не трогая проект')
     bl_options = {'REGISTER'}
 
     def execute(self, context):

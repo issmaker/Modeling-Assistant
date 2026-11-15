@@ -48,7 +48,9 @@ def snapshot():
         obj=current[0]
         s.update(cache_hits=obj.hits,cache_misses=obj.misses,
                  pattern_batches=len(obj.patterns)+len(obj.aa_patterns),
-                 chrome_batches=len(obj.chrome),box_batches=len(obj.boxes))
+                 chrome_batches=len(obj.chrome),box_batches=len(obj.boxes),
+                 style_material_ready=bool(obj.material_shader),
+                 style_material_error=obj.material_error)
     return s
 
 def release():

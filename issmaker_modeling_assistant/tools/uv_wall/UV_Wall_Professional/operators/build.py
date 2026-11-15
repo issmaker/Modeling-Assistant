@@ -202,10 +202,9 @@ class OBJECT_OT_build_uv_wall_along_path(bpy.types.Operator):
                 log_event(f"REENTRANCY_DENIED reason={error}", "ERROR")
             except Exception:
                 pass
-            level={"WARNING"} if reliability_kind in {"UNCERTAIN","RESOURCE_LIMIT"} else {"ERROR"}
-            suffix=(" · Это не доказательство плохой геометрии; причина записана в Reliability Ledger."
-                    if reliability_kind in {"UNCERTAIN","RESOURCE_LIMIT"} else "")
-            self.report(level, reliability_message+suffix)
+            # A guard rejection has no reliability_kind/message from the
+            # inner build path. Never mask the original BuildReentryError.
+            self.report({"WARNING"}, "Повторный Build отклонён: " + str(error))
             return {"CANCELLED"}
         except Exception:
             # The inner block already wrote a full failure snapshot.  An error

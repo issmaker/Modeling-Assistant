@@ -1,13 +1,13 @@
-"""ISSMAKER Design System 0.1 — mirrors DWOS native viewport theme.
+"""ISSMAKER Design System 0.1 — shares ISSMAKER viewport theme.
 
 Only drawing/style values live here. No Blender operators, handlers or mesh logic.
 Per-module geometry and window-specific controls remain independent.
 """
 # Pass 08: the design system is the dependency root.  This module must never
 # import Blender, `tools.*`, or a nested package.  Importing tools here forces
-# DWOS native/__init__.py to execute while the design system is initializing,
+# nested tool initialization to execute while the design system is initializing,
 # which caused Blender's circular import (component_style not yet defined).
-# Values match the accepted DWOS viewport_theme palette byte-for-byte.
+# Values match the accepted existing viewport palette byte-for-byte.
 PANEL_BG = (0.010, 0.014, 0.017, 0.915)
 PANEL_SURFACE = (0.030, 0.040, 0.045, 0.94)
 PANEL_HOVER = (0.052, 0.067, 0.072, 0.97)
@@ -24,13 +24,13 @@ CORNER_RADIUS=7.0
 HUD_ALPHA=0.94
 
 MODULE_LABELS={
-    'BRICK_HOLE':'Проёмы', 'COLLISION':'Коллизии',
-    'UV_WALL':'Стены', 'DWOS':'Окна и двери',
+    'COLLISION':'Коллизии',
+    'UV_WALL':'Стены', 
 }
 
 
 # UI 2.0 / Pass05: shared semantic design rules for every viewport tool.
-# DWOS is the color reference, but geometry, hitboxes and modal logic are NOT
+# Shared color tokens do not imply shared geometry, hitboxes or modal logic.
 # shared here. These helpers are intentionally pure, deterministic and testable.
 from math import isfinite
 

@@ -149,14 +149,19 @@ def validate_path_mesh_topology(path_obj, require_single_chain=True, tolerance=R
         spatial_tree.insert(point, index)
     spatial_tree.balance()
     coincident_vertices = []
+    connected_short_edges = []
     for index, point in enumerate(coordinates):
         for _co, other, distance in spatial_tree.find_range(point, tolerance):
             if other <= index:
                 continue
-            coincident_vertices.append((index, other, distance))
-            if len(coincident_vertices) >= 100:
+            pair=(index, other)
+            if pair in edge_keys:
+                connected_short_edges.append((index, other, edge_keys[pair], distance))
+            else:
+                coincident_vertices.append((index, other, distance))
+            if len(coincident_vertices) + len(connected_short_edges) >= 100:
                 break
-        if len(coincident_vertices) >= 100:
+        if len(coincident_vertices) + len(connected_short_edges) >= 100:
             break
 
     # A disconnected vertex lying on the interior of another edge is a
@@ -186,8 +191,9 @@ def validate_path_mesh_topology(path_obj, require_single_chain=True, tolerance=R
         f"components={len(components)}; isolated={len(isolated)}; zero_edges={len(zero_edges)}; "
         f"duplicate_edges={len(duplicate_edges)}; branch_vertices={len(branches)}; "
         f"invalid_degrees={len(invalid_degrees)}; coincident_vertices={len(coincident_vertices)}; "
+        f"connected_short_edges={len(connected_short_edges)}; "
         f"t_junctions={len(t_junctions)}; vertex_edge_candidates={candidate_checks}; "
-        f"status={'FAILED' if (isolated or zero_edges or duplicate_edges or ((not allow_branches) and invalid_degrees) or coincident_vertices or t_junctions or (require_single_chain and len(components) != 1)) else 'OK'}",
+        f"status={'FAILED' if (isolated or zero_edges or duplicate_edges or ((not allow_branches) and invalid_degrees) or coincident_vertices or connected_short_edges or t_junctions or (require_single_chain and len(components) != 1)) else 'OK'}",
         "PATH_CHECK",
     )
     if isolated:
@@ -201,6 +207,9 @@ def validate_path_mesh_topology(path_obj, require_single_chain=True, tolerance=R
     if coincident_vertices:
         formatted = [(a, b, round(distance, 9)) for a, b, distance in coincident_vertices[:40]]
         log_event(f"PATH_COINCIDENT_VERTICES vertex_pairs_distance={formatted}", "PATH_CHECK")
+    if connected_short_edges:
+        formatted = [(a, b, edge, round(distance, 9)) for a,b,edge,distance in connected_short_edges[:40]]
+        log_event(f"PATH_SHORT_CONNECTED_EDGES vertex_pairs_edge_distance={formatted}", "PATH_CHECK")
     if t_junctions:
         formatted = [(v, e, round(f, 9), round(d, 9)) for v, e, f, d in t_junctions[:40]]
         log_event(f"PATH_T_JUNCTIONS vertex_edge_factor_distance={formatted}", "PATH_CHECK")
@@ -210,7 +219,8 @@ def validate_path_mesh_topology(path_obj, require_single_chain=True, tolerance=R
     if zero_edges: problems.append(f"нулевые рёбра: {zero_edges[:10]}")
     if duplicate_edges: problems.append(f"дубли рёбер: {duplicate_edges[:10]}")
     if invalid_degrees and not allow_branches: problems.append(f"ветвления/T-узлы в вершинах: {invalid_degrees[:10]}")
-    if coincident_vertices: problems.append(f"несоединённые близкие вершины: {[(a, b) for a, b, _d in coincident_vertices[:10]]}")
+    if coincident_vertices: problems.append(f"несваренные близкие вершины: {[(a, b) for a, b, _d in coincident_vertices[:10]]}")
+    if connected_short_edges: problems.append(f"короткие соединённые рёбра (< {tolerance:.4f} м): {[(a,b,edge) for a,b,edge,_distance in connected_short_edges[:10]]}")
     if t_junctions: problems.append(f"вершина на чужом ребре: {[(v, e) for v, e, _f, _d in t_junctions[:10]]}")
     if require_single_chain and len(components) != 1:
         problems.append(f"отдельных компонентов: {len(components)}")

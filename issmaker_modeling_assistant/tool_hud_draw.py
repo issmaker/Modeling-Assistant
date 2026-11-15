@@ -3,6 +3,7 @@
 Native Gizmos continue to own hit-testing. A shared POST_PIXEL pass renders the
 visible controls. No modal event capture, no Mesh access, no perpetual idle timer.
 """
+from .extension_compat import addon_key
 import math
 import time
 from . import icon_pack
@@ -33,6 +34,12 @@ _STROKES={
  'CHECK':[(-.75,0,-.18,-.65),(-.18,-.65,.76,.75)],
  'RADIAL':[(-.75,-.25,-.25,.25),(-.25,.25,.5,.65),(.5,.65,.8,-.4)],
  'ISS_TOOLS':[(-.72,-.72,-.2,-.72),(-.2,-.72,-.2,-.2),(-.2,-.2,-.72,-.2),(-.72,-.2,-.72,-.72),(.2,-.72,.72,-.72),(.72,-.72,.72,-.2),(.72,-.2,.2,-.2),(.2,-.2,.2,-.72),(-.72,.2,-.2,.2),(-.2,.2,-.2,.72),(-.2,.72,-.72,.72),(-.72,.72,-.72,.2),(.2,.2,.72,.2),(.72,.2,.72,.72),(.72,.72,.2,.72),(.2,.72,.2,.2)],
+ 'FAV_HOLE':[(-.82,-.68,.82,-.68),(-.82,-.68,-.82,.76),(.82,-.68,.82,.76),(-.82,.76,.82,.76),(-.36,-.68,-.36,.38),(-.36,.38,.36,.38),(.36,.38,.36,-.68),(-.6,.06,-.42,.06)],
+ 'FAV_WINDOW':[(-.82,-.78,.82,-.78),(.82,-.78,.82,.78),(.82,.78,-.82,.78),(-.82,.78,-.82,-.78),(0,-.75,0,.75),(-.79,.04,.79,.04)],
+ 'FAV_COLLISION':[(-.80,-.53,.25,-.53),(.25,-.53,.25,.53),(.25,.53,-.8,.53),(-.8,.53,-.8,-.53),(-.17,-.78,.80,-.78),(.80,-.78,.80,.26),(.80,.26,-.17,.26),(-.17,.26,-.17,-.78),(-.32,-.30,.38,.38),(-.32,.38,.38,-.30)],
+ 'FAV_WALL':[(-.82,-.72,.82,-.72),(-.82,-.72,-.82,.72),(.82,-.72,.82,.72),(-.82,.72,.82,.72),(-.82,-.22,.82,-.22),(-.82,.24,.82,.24),(-.22,-.72,-.22,-.22),(.44,-.22,.44,.24),(-.32,.24,-.32,.72)],
+ 'FAV_SHADE':[(-.78,-.58,0,.8),(0,.8,.78,-.58),(.78,-.58,-.78,-.58),(0,.8,0,-.58),(-.78,-.58,0,-.58),(0,-.58,.78,-.58),(-.40,-.04,0,-.58)],
+ 'FAV_FLAT':[(-.77,-.55,.77,-.55),(-.77,-.14,.77,-.14),(-.77,.28,.77,.28),(-.77,.70,.77,.70)],
  'ISS_SPLIT':[(-.72,-.65,.72,-.65),(.72,-.65,.72,.65),(.72,.65,-.72,.65),(-.72,.65,-.72,-.65),(0,-.65,0,.65),(-.56,0,-.15,0),(.15,.25,.54,.25)]}
 
 
@@ -85,7 +92,30 @@ def _smooth(t):
     return t*t*(3.-2.*t)
 
 
-def button_paint(x,y,size,symbol,active,hover,accent,radial_opener=False, *, theme=None):
+def _favorite_badge(x,y,size,hover,accent):
+    """A compact heart outside the glyph, inside the native Gizmo pick disc.
+
+    The painted marker has no new click zone; Blender's original Gizmo owns
+    every mouse event. Its vector shape remains sharp at high DPI.
+    """
+    import math
+    # triangulate_fan is imported at module scope to avoid accidental shadowing.
+    from math import sin,cos,pi
+    r=max(4.,size*.19)
+    cx=x+size*.27
+    cy=y+size*.28
+    _circle(cx,cy,r+1.,(.02,.035,.05,.96))
+    _ring(cx,cy,r,.85,(*accent,.52+.3*hover))
+    heart=[]
+    for j in range(32):
+        t=2*pi*j/32.
+        px=(16*sin(t)**3)/17.
+        py=(13*cos(t)-5*cos(2*t)-2*cos(3*t)-cos(4*t))/19.
+        heart.append((cx+px*r*.70,cy+py*r*.67))
+    _tris(triangulate_fan(heart),(*accent,.85+.14*hover))
+
+
+def button_paint(x,y,size,symbol,active,hover,accent,radial_opener=False, *, theme=None, favorite=False):
     """Draw one complete circular control; no interception outside native hit circle."""
     hover=_smooth(hover)
     panel_ink=_viewport_skin.ink(theme)
@@ -117,12 +147,22 @@ def button_paint(x,y,size,symbol,active,hover,accent,radial_opener=False, *, the
     rotate=((.075 if symbol in ('SHADING_SOLID','LINKED','MOD_UVPROJECT') else 0.)*hover)
     dx=(1.1*hover if symbol in ('LINKED','AUTOMERGE_ON') else 0.)
     dy=(.8*hover if symbol in ('MOD_SMOOTH','UV_SYNC_SELECT') else 0.)
-    icon_size=size*(.89+.025*hover)
-    # ISSMAKER 1.8.2 field appearance: use the original geometry glyphs,
-    # independently of GPUTexture support. The later FLOAT sprite fix made
-    # different bitmap pictograms appear on the same buttons, which was an
-    # unrequested visual redesign. Keep hit-testing and hover unchanged.
-    _fallback_icon(symbol,cx+dx,cy+dy,size,(*ink,.99),rotate)
+    # Wave 5: native Blender 4.5 UI icon artwork, rasterized once into
+    # DPI-independent monochrome masks. Blender's built-in UILayout icon
+    # API is not a GPU Viewport draw API, so the compiled SVG masks are used
+    # here, always tinted by the current ThemeSnapshot foreground.
+    # This modifies *paint only*: native Gizmos still own the exact pick
+    # rectangles and all interaction callbacks.
+    icon_size=size*(.66+.022*hover)
+    if not icon_pack.render(symbol,cx+dx,cy+dy,icon_size,ink,
+                            opacity=.99,rotation=rotate):
+        # Unavailable GPU backend, missing resource, or malformed texture:
+        # never hide a control; preserve deterministic geometry fallback.
+        _fallback_icon(symbol,cx+dx,cy+dy,size,(*ink,.99),rotate)
+    if favorite:
+        # Favorites are deliberately recognizable even before mouse hover.
+        _ring(cx,cy,r-2.7,1.1,(*accent,.62+.22*hover))
+        _favorite_badge(cx,cy,size,hover,accent)
 
 
 def render(groups,accent,now=None):
@@ -132,7 +172,7 @@ def render(groups,accent,now=None):
     try:
         import bpy
         from .core import theme_engine
-        addon=bpy.context.preferences.addons.get('issmaker_modeling_assistant')
+        addon=bpy.context.preferences.addons.get(addon_key())
         shared_theme=theme_engine.from_preferences(addon.preferences if addon else None)
     except (RuntimeError,ReferenceError,AttributeError,ImportError,TypeError):
         shared_theme=None
@@ -151,7 +191,8 @@ def render(groups,accent,now=None):
                 radial=(symbol=='LINKED' or
                        (group['key']=='view' and symbol in {'SHADING_SOLID','ISS_TOOLS'}) or
                        (group['key']=='shader' and symbol=='NODE_MATERIAL'))
-                button_paint(x,y,size,symbol,active,hover,accent,radial,theme=shared_theme)
+                button_paint(x,y,size,symbol,active,hover,accent,radial,
+                             theme=shared_theme,favorite=(group['key']=='favorites'))
     finally:
         gpu.state.blend_set('NONE')
     if len(_HOVER_LEVELS)>180:

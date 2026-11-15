@@ -14,8 +14,6 @@ class ToolSpec:
 
 
 TOOLS = (
-    ToolSpec('BRICK_HOLE', 'Проёмы', '1.0.17', 'view3d.brick_hole_interactive', 'tools.brick_hole', True, 'MOD_UVPROJECT'),
-    ToolSpec('DWOS', 'Окна и двери', '3.7.37 RC38', 'dwos.viewport_composer', 'tools.dwos_windows', True, 'NODE_MATERIAL'),
     ToolSpec('COLLISION', 'Коллизии', '3.5.2', 'collision_inspector.check', 'tools.collision_inspector', True, 'MOD_PHYSICS'),
     ToolSpec('UV_WALL', 'Стены', '1.18.17', 'uvwall.viewport_inspector', 'tools.uv_wall', True, 'MOD_WIREFRAME'),
 )
@@ -26,8 +24,8 @@ MENU_TOOLS = TOOLS
 
 def validate_registry(specs=TOOLS):
     specs = tuple(specs)
-    if len(specs) != 4 or any(not spec.enabled for spec in specs):
-        raise ValueError("Tools radial menu requires exactly four enabled slots")
+    if len(specs) != 2 or any(not spec.enabled for spec in specs):
+        raise ValueError("Tools radial menu requires exactly two enabled slots")
     used_ids, used_operators = set(), set()
     for spec in specs:
         if not spec.tool_id or spec.tool_id in used_ids:
@@ -45,4 +43,4 @@ def validate_registry(specs=TOOLS):
 
 
 def find(tool_id):
-    return next((spec for spec in TOOLS if spec.tool_id == tool_id), None)
+    return next((spec for spec in MENU_TOOLS if spec.tool_id == tool_id), None)

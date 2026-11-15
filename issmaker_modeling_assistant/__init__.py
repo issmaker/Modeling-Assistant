@@ -1,27 +1,31 @@
 bl_info = {
     "name": "ISSMAKER Unified Modeling Suite",
     "author": "issmaker",
-    "version": (2, 0, 26),
+    "version": (2, 0, 84),
     "blender": (4, 5, 0),
     "location": "3D Viewport / UV Editor / Shader Editor",
-    "description": "W58.28 UNIVERSAL WINDOW LAB TEST ONLY: LP-normalized tangent corner solver, curved/mixed geometric QA; NOT production",
+    "description": "ISSMAKER Modeling Assistant: professional modeling tools and contact diagnostics",
     "category": "3D View",
 }
 
+# Blender Extensions may intentionally remove top-level bl_info at runtime.
+# This release constant must remain available after addon_utils.enable().
+ADDON_VERSION = (2, 0, 84)
+
 import bpy
+from . import legacy_namespace_bridge as _legacy_namespace_bridge
+_legacy_namespace_bridge.install()
 
 from . import log, runtime, view_tools, modeling_tools, uv_tools, shader_tools, workspace_tools, uv_feedback, weld_preview, module_visualization, ui, diagnostics, hud_evidence_lab, unified_issue_navigator, deep_autolab
-from .tools.brick_hole import integration as brick_hole_integration
 from .tools.collision_inspector import integration as collision_integration
 from .tools.uv_wall import integration as uv_wall_integration
-from .tools.dwos_windows import integration as dwos_integration
 from .core.registry import validate_registry
-from .core import undo_audit
+from .core import undo_audit, process_feedback, cooperative_jobs
 
 
 MODULES = (
-    view_tools, weld_preview, modeling_tools, uv_tools, shader_tools,
-    workspace_tools, uv_feedback, module_visualization, brick_hole_integration, collision_integration, uv_wall_integration, dwos_integration, ui, diagnostics, hud_evidence_lab, unified_issue_navigator, deep_autolab,
+    process_feedback, view_tools, weld_preview, modeling_tools, uv_tools, shader_tools,
+    workspace_tools, uv_feedback, module_visualization, collision_integration, uv_wall_integration, ui, diagnostics, hud_evidence_lab, unified_issue_navigator, deep_autolab,
 )
 
 
@@ -80,7 +84,7 @@ def register():
             hud_gpu_runtime.release()
         except Exception:pass
         raise
-    log.write(f"Add-on {'.'.join(map(str, bl_info['version']))} registered | Blender {bpy.app.version_string}")
+    log.write(f"Add-on {'.'.join(map(str, ADDON_VERSION))} registered | Blender {bpy.app.version_string}")
 
 
 def unregister():
@@ -104,6 +108,8 @@ def unregister():
     phase('appearance flush', ui.flush_appearance)
     from . import styled_panels
     phase('styled panels', lambda: styled_panels.shutdown(bpy.context))
+    phase('cooperative job controller', cooperative_jobs.reset)
+    phase('shared process hud', process_feedback.reset)
     phase('undo audit', undo_audit.unregister)
     phase('runtime reset', runtime.reset)
     for module in reversed(MODULES):
@@ -122,3 +128,4 @@ def unregister():
         phase('HUD components release', workspace_components.release)
     phase('components cleanup', component_cleanup)
     phase('shutdown log', lambda: log.write('Add-on unregistered'))
+    phase('release extension namespace aliases', _legacy_namespace_bridge.uninstall)

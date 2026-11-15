@@ -819,6 +819,110 @@ def _is_inside_convex(inner_verts, outer_verts, outer_polys, tolerance=1.0e-9):
     )
 
 
+def _convex_shells_have_positive_shared_volume(data_1, data_2):
+    """Prove 3D interior intersection via convex-polyhedron SAT.
+
+    Call ONLY for two validated closed convex shells. Positive AABB overlap
+    alone is not evidence. The separating axes are all face normals plus
+    pairwise cross products of unique nonzero edge directions. A zero-width
+    overlap on ANY separating axis is contact, not volume penetration.
+
+    Return True for certified positive volume, False for certified
+    non-penetration, None when the input or computation exceeds the safety
+    budget. The caller must never interpret None as positive evidence.
+    This probe never changes the source mesh and is winding-independent.
+    """
+    verts_a = data_1["verts"]
+    verts_b = data_2["verts"]
+    if not verts_a or not verts_b:
+        return None
+    if not _aabb_has_positive_shared_volume(data_1, data_2):
+        return False
+
+    def canonical(direction):
+        if direction.length_squared < 1.0e-24:
+            return None
+        unit = direction.normalized()
+        if next((float(v) for v in unit if abs(v) > 1.0e-12), 1.0) < 0.0:
+            unit.negate()
+        return unit
+
+    def face_axes(data):
+        axes = {}
+        center = sum(data["verts"], Vector((0.0, 0.0, 0.0))) / len(data["verts"])
+        # Validate global convexity independently of edge-angle heuristics.
+        if len(data["face_verts"]) != len(data["polys"]):
+            return None
+        if len(data["polys"]) * len(data["verts"]) > 150000:
+            return None
+        scale = max((v - center).length for v in data["verts"])
+        # Blender mesh coordinates are float32: a rotated plane can
+        # numerically deviate by ~1e-7 m at unit scale without being warped.
+        plane_tol = max(5.0e-7, scale * 1.0e-6)
+        for polygon, (face_point, normal) in zip(data["face_verts"], data["polys"]):
+            axis = canonical(normal)
+            if axis is None or len(polygon) < 3:
+                return None
+            # A convexity test is invalid if the input polygon itself has
+            # warped off its supporting plane or its face normal is stale.
+            if any(abs((data["verts"][index] - face_point).dot(axis)) > plane_tol
+                   for index in polygon):
+                return None
+            orient = axis.copy()
+            if orient.dot(center - face_point) > 0.0:
+                orient.negate()
+            plane_error = max((v - face_point).dot(orient) for v in data["verts"])
+            span = max((v - center).length for v in data["verts"])
+            if plane_error > max(5.0e-7, span * 1.0e-6):
+                return None
+            axes.setdefault(tuple(round(float(c), 12) for c in axis), axis)
+        return axes
+
+    def edge_axes(data):
+        result = {}
+        for edge in data["edge_segments"]:
+            direction = canonical(edge["p1"] - edge["p0"])
+            if direction is not None:
+                result.setdefault(tuple(round(float(v), 12) for v in direction), direction)
+        return tuple(result.values())
+
+    face_a = face_axes(data_1)
+    face_b = face_axes(data_2)
+    if not face_a or not face_b:
+        return None
+    edges_a = edge_axes(data_1)
+    edges_b = edge_axes(data_2)
+    # Avoid quadratic stalls on extremely elaborate faceted objects. When the
+    # safety budget is exceeded, do not claim positive overlap without proof.
+    if len(edges_a) * len(edges_b) > 4096:
+        return None
+    axes = dict(face_a)
+    axes.update(face_b)
+    for edge_a in edges_a:
+        for edge_b in edges_b:
+            crossing = edge_a.cross(edge_b)
+            # Nearly parallel directions give numerically meaningless
+            # axes when normalized from Blender float32 data.
+            if crossing.length_squared < 1.0e-12:
+                continue
+            axis = canonical(crossing)
+            if axis is not None:
+                axes.setdefault(tuple(round(float(c), 12) for c in axis), axis)
+
+    for axis in axes.values():
+        projections_a = [axis.dot(v) for v in verts_a]
+        projections_b = [axis.dot(v) for v in verts_b]
+        a_min, a_max = min(projections_a), max(projections_a)
+        b_min, b_max = min(projections_b), max(projections_b)
+        overlap = min(a_max, b_max) - max(a_min, b_min)
+        span = max(a_max - a_min, b_max - b_min)
+        # Strictly-positive interior overlap needs to exceed the numerical
+        # tolerance of float32 coordinate transforms; contact does not.
+        if overlap <= max(1.0e-6, span * 1.0e-6):
+            return False
+    return True
+
+
 def _segment_pierces_triangle(point, other, triangle, eps=1.0e-9):
     direction = other - point
     length_sq = direction.dot(direction)
@@ -2462,7 +2566,16 @@ def _analyse_object(settings, obj, analysis_signature=""):
 
                 candidates = data_1["bvh"].overlap(data_2["bvh"])
                 overlap = _real_face_overlaps(data_1, data_2, candidates)
-                if overlap and _aabb_has_positive_shared_volume(data_1, data_2):
+                # For genuinely closed convex shells, SAT is a stronger
+                # independent geometric verdict than boundary triangle
+                # crossings, which may false-positive on rotated contact.
+                sat_result = None
+                if (overlap and _aabb_has_positive_shared_volume(data_1, data_2)
+                        and shell_a in valid_convex_shells
+                        and shell_b in valid_convex_shells):
+                    sat_result = _convex_shells_have_positive_shared_volume(data_1, data_2)
+                if (overlap and _aabb_has_positive_shared_volume(data_1, data_2)
+                        and sat_result is not False):
                     faces_1 = {data_1["face_orig"][a] for a, _ in overlap}
                     faces_2 = {data_2["face_orig"][b] for _, b in overlap}
                     counts["INTERSECTION"] += 1
@@ -2490,6 +2603,24 @@ def _analyse_object(settings, obj, analysis_signature=""):
                     )
                 ]
                 if coplanar_pairs:
+                    # A positive-area coplanar patch can coexist with actual
+                    # volume penetration (e.g. two coaxial overlapping cubes).
+                    # BVH face crossing is insufficient here: prove a positive
+                    # 3D overlap for closed convex shells using SAT, not AABB.
+                    if (shell_a in valid_convex_shells
+                            and shell_b in valid_convex_shells
+                            and _convex_shells_have_positive_shared_volume(data_1, data_2) is True):
+                        counts["INTERSECTION"] += 1
+                        _event_add(settings, kind="INTERSECTION", obj=obj,
+                            shell_a=shell_a, shell_b=shell_b,
+                            text=f"Оболочки {shell_a} и {shell_b}: объёмное пересечение",
+                            detail=("Положительное пересечение внутренних объёмов "
+                                    "замкнутых выпуклых оболочек подтверждено "
+                                    "теоремой разделяющей оси (SAT); "
+                                    "совпадающие поверхности указаны отдельно."),
+                            indices_a={data_1["face_orig"][a] for a, _ in coplanar_pairs},
+                            indices_b={data_2["face_orig"][b] for _, b in coplanar_pairs},
+                            select_mode="FACE", signature=analysis_signature)
                     counts["SURFACE_OVERLAP"] += 1
                     _event_add(settings, kind="SURFACE_OVERLAP", obj=obj,
                         shell_a=shell_a, shell_b=shell_b,

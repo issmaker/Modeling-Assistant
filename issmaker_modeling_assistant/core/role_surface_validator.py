@@ -21,7 +21,7 @@ def role_anchor(role, family='UNKNOWN', interior_sign=-1, adaptive=False):
     """Return an expected LOCAL +Z/-Z *hint* only when the role contract says so.
 
     Walls and end caps depend on path tangent: cannot be inferred from a role
-    alone. Adaptive DWOS uses a varying local tangent, never a flat Z anchor.
+    alone. Curved surfaces need a local tangent, not an assumed Z anchor.
     """
     role = str(role or 'UNKNOWN').upper()
     family = str(family).upper()
@@ -30,13 +30,6 @@ def role_anchor(role, family='UNKNOWN', interior_sign=-1, adaptive=False):
             return (0., 0., 1.), 0.0  # upward, not necessarily horizontal
         if role == 'BOTTOM_CAP':
             return (0., 0., -1.), 0.0
-    elif family == 'DWOS' and not adaptive:
-        if interior_sign not in (-1, 1):
-            raise ValueError('ROLE_INVALID_INTERIOR_SIGN')
-        if role in {'FRAME_EXTERIOR', 'GLASS_EXTERIOR', 'GLASS_SINGLE', 'INTERIOR_BACK'}:
-            return (0., 0., float(-interior_sign)), .75
-        if role in {'FRAME_INTERIOR_BACK', 'GLASS_INTERIOR', 'INTERIOR_V_BACK_RETURN'}:
-            return (0., 0., float(interior_sign)), .75
     return None
 
 

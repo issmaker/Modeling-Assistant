@@ -5,12 +5,13 @@ bounded local rect for both pixels and hit test. Theme values live exclusively
 in root AddonPreferences and its versioned autosave profile.
 """
 from __future__ import annotations
+from .extension_compat import addon_key
 import time
 import math
 from dataclasses import replace
 import bpy
 from bpy.types import Operator
-from .core import pattern_engine, theme_engine, motion_engine, window_manager, window_visibility, action_trace, frame_diagnostics, hud_quality, appearance_layout
+from .core import pattern_engine, theme_engine, motion_engine, window_manager, window_visibility, action_trace, frame_diagnostics, hud_quality, appearance_layout, ui_layout_scaling, studio_responsive_layout
 from .core import viewport_skin as _viewport_skin
 from .core.design_tokens import mix_color as _mix_ui_color
 from .appearance_gpu import Painter, RenderCache, within
@@ -19,15 +20,14 @@ _ACTIVE = {}
 SWATCHES=((.06,.62,.49),(.12,.43,.88),(.51,.33,.78),(.85,.64,.23),
           (.04,.69,.78),(.91,.34,.32),(.56,.72,.17),(.78,.36,.57),
           (.62,.70,.77),(.84,.58,.46))
-SAMPLE_TOOLS=(('DWOS','ОКНА И ДВЕРИ','FRAME · BOX · GLASS'),
+SAMPLE_TOOLS=(
               ('UV Wall','СТЕНА','СТЕНА · ПОВЕРХНОСТЬ · КАРНИЗ'),
-              ('Collision','КОЛЛИЗИИ','ПРОБЛЕМЫ · НАВИГАЦИЯ'),
-              ('Brick Hole','ПРОЁМЫ','ШИРИНА · ГЛУБИНА · UV'))
+              ('Collision','КОЛЛИЗИИ','ПРОБЛЕМЫ · НАВИГАЦИЯ'))
 
 
 def _prefs():
     try:
-        addon=bpy.context.preferences.addons.get('issmaker_modeling_assistant')
+        addon=bpy.context.preferences.addons.get(addon_key())
         return addon.preferences if addon is not None else None
     except (AttributeError,RuntimeError,ReferenceError):return None
 
@@ -135,8 +135,9 @@ class IMA_OT_AppearanceStudio(Operator):
         self._drag=False;self._minimized=bool(pref.ui_studio_collapsed)
         self._tab=pref.ui_studio_tab;self._tab_previous=self._tab;self._scroll=0;self._advanced_mode=False;self._adv_scroll=0
         self._hits=[];self._r=None;self._draw_error=''
-        self._pw=min(794.,max(400.,context.region.width-32.))
-        self._ph=min(680.,max(350.,context.region.height-32.))
+        display=ui_layout_scaling.from_preferences(pref,context=context)
+        self._pw,self._ph=studio_responsive_layout.dimensions(
+            context.region.width,context.region.height,display.safe_window)
         if context.region.width<430 or context.region.height<395:
             self.report({'WARNING'},'Увеличьте область Viewport для Appearance Studio')
             return {'CANCELLED'}
@@ -213,7 +214,10 @@ class IMA_OT_AppearanceStudio(Operator):
 
     def _current_signature(self):
         blockers=tuple(sorted(tuple(round(v,2) for v in r) for r in self._blockers()))
-        return (self._region.width,self._region.height,blockers)
+        pref=_prefs()
+        display=ui_layout_scaling.from_preferences(pref,context=bpy.context)
+        return (self._region.width,self._region.height,blockers,
+                round(display.safe_window,3),round(display.font,3))
 
     def _reflow_if_needed(self,context):
         signature=self._current_signature()
@@ -221,8 +225,9 @@ class IMA_OT_AppearanceStudio(Operator):
         if self._region.width<430 or self._region.height<395:
             self._hits=[];self._r=None
             return False
-        self._pw=min(794.,max(400.,self._region.width-32.))
-        self._ph=min(680.,max(350.,self._region.height-32.))
+        display=ui_layout_scaling.from_preferences(_prefs(),context=context)
+        self._pw,self._ph=studio_responsive_layout.dimensions(
+            self._region.width,self._region.height,display.safe_window)
         return self._place(context)
 
     def _place(self,context,preferred=None):
@@ -250,6 +255,9 @@ class IMA_OT_AppearanceStudio(Operator):
                 f"decorative_hz={perf['pattern_hz']} samples={perf['frames']}")
         if hasattr(self,'_render_cache') and self._render_cache.aa_error:
             action_trace.record('HUD_QUALITY_FALLBACK','UI',self._render_cache.aa_error)
+        if hasattr(self,'_render_cache') and self._render_cache.material_error:
+            action_trace.record('STYLE_GPU_MATERIAL_FALLBACK','UI',
+                                self._render_cache.material_error)
         if hasattr(self,'_motion'):self._motion.clear()
         if hasattr(self,'_render_cache'):self._render_cache.clear()
         # Shared background caches belong to the current region and survive
@@ -316,9 +324,11 @@ class IMA_OT_AppearanceStudio(Operator):
             if window_visibility.is_hidden(self._scope,'APPEARANCE_STUDIO'):
                 self._hits=[];return
             if not self._r:return
-            started=time.monotonic()
+            # Use high-resolution perf_counter for CPU render costs.
+            # Windows Blender 4.5 monotonic() can round sub-16ms draws to 0.
+            started=time.perf_counter()
             self._render(context)
-            self._fps_stats.sample(started,time.monotonic())
+            self._fps_stats.sample(started,time.perf_counter())
             if self._closing_at is not None or self._pending_min is not None:self._hits=[]
         except Exception as exc:
             if not self._draw_error:
@@ -333,6 +343,8 @@ class IMA_OT_AppearanceStudio(Operator):
         x,y,x2,y2=self._r;w=x2-x;h=y2-y
         self._render_cache.max_patterns=hud_quality.resolve(theme.render_quality).max_cached_patterns
         p=Painter(cache=self._render_cache)
+        display=ui_layout_scaling.from_preferences(pref,context=context)
+        p.font_scale=studio_responsive_layout.text_scale(display.font)
         self._hits=[]
         spec=self._motion_spec();now=time.monotonic()
         self._frame_theme=theme;self._frame_spec=spec;self._frame_now=now
@@ -346,6 +358,9 @@ class IMA_OT_AppearanceStudio(Operator):
             shell_glow=.015*motion_engine.envelope(self._started,now,max(.01,spec.duration('enter')))
             shell=_viewport_skin.shell(theme)
             p.box(x,y,w,h,shell['panel'],(*shell['border'][:3],min(.99,.9+shell_glow)),rad=15)
+            # Shaded surface is paint-only and stays under controls/captions.
+            if not self._minimized and h>160:
+                p.material(theme,x+9,y+12,w-18,h-76,max(0.,now-self._started))
             # Restrained procedural material underneath all controls.
             from dataclasses import replace
             quiet=replace(theme,pattern_strength=theme.pattern_strength*.12)
@@ -354,7 +369,7 @@ class IMA_OT_AppearanceStudio(Operator):
                     now-self._started,self._fps_stats.decoration_hz())
                 phase=elapsed*.48*theme.pattern_speed*theme.pattern_amplitude if spec.enabled else 0.
                 # Very subtle footer relief, never an all-over wireframe.
-                p.pattern(theme.pattern,x+14,y+57,w-28,min(51.,h*.10),quiet,phase,preview=True)
+                p.pattern(theme.pattern,x+14,y+57,w-28,min(51.,h*.10),quiet,0.,preview=True)
             p.box(x+5,y+h-54,w-10,47,shell['header'],(*shell['border'][:3],.38),rad=11)
             p.text('ISSMAKER  /  APPEARANCE STUDIO',x+23,y+h-36,15,shell['title'],width=w-145)
             self._button(p,(x+w-88,y+h-46,34,30),'−','min')
@@ -387,6 +402,9 @@ class IMA_OT_AppearanceStudio(Operator):
             p.box(*prev,(*theme.header,.92),(*theme.border,.55),rad=10)
             label_area,canvas=appearance_layout.hero_regions(*prev)
             p.box(*canvas,(*theme.panel,.98),(*theme.border,.23),rad=8)
+            shader_ok=p.material(theme,canvas[0]+3,canvas[1]+3,
+                                 canvas[2]-6,canvas[3]-6,
+                                 max(0.,now-self._started),preview=True)
             elapsed=frame_diagnostics.FrameDiagnostics.quantized_seconds(
                 now-self._started,self._fps_stats.decoration_hz())
             phase=elapsed*.65*theme.pattern_speed*theme.pattern_amplitude
@@ -396,13 +414,13 @@ class IMA_OT_AppearanceStudio(Operator):
             if self._pattern_prev is not None and pattern_phase<1.:
                 before=p.opacity
                 p.opacity*=1.-motion_engine.ease_in_out_cubic(pattern_phase)
-                p.pattern(self._pattern_prev,*canvas,sample_theme,phase)
+                p.pattern(self._pattern_prev,*canvas,sample_theme,0. if shader_ok else phase)
                 p.opacity=before*motion_engine.ease_in_out_cubic(pattern_phase)
-                p.pattern(theme.pattern,*canvas,sample_theme,phase)
+                p.pattern(theme.pattern,*canvas,sample_theme,0. if shader_ok else phase)
                 p.opacity=before
             else:
                 self._pattern_prev=None
-                p.pattern(theme.pattern,*canvas,sample_theme,phase)
+                p.pattern(theme.pattern,*canvas,sample_theme,0. if shader_ok else phase)
             p.text('АКТИВНЫЙ ФОН',label_area[0]+4,prev[1]+83,10,shell['muted'])
             p.text(pattern_engine.NAMES.get(theme.pattern,'Без фона'),label_area[0]+4,prev[1]+54,20,shell['title'],width=label_area[2]-14)
             p.text(theme.surface.title()+'  ·  '+theme.render_quality, label_area[0]+4,prev[1]+28,10,shell['muted'],width=label_area[2]-13)
@@ -556,11 +574,17 @@ class IMA_OT_AppearanceStudio(Operator):
                 hover=self._motion.sample(('card',ident),self._hover==('pattern',ident),time.monotonic(),self._motion_spec().duration('hover'))
                 p.box(cx,cy,size,card_h,(*theme.header,.98),(*theme.accent,.62) if selected else (*theme.border,.26+.27*hover),rad=10)
                 p.box(cx+5,cy+29,size-10,card_h-35,(*theme.panel,.99),(*theme.border,.18),rad=7)
+                card_theme=replace(theme,pattern=ident,
+                                   pattern_strength=theme.pattern_strength*.87)
+                card_material_ok=p.material(card_theme,cx+8,cy+32,size-16,card_h-41,
+                           phase if (selected or self._hover==('pattern',ident)) else 0.,
+                           preview=True)
                 # Only selected/hovered cards animate geometry. Every other
                 # thumbnail stays GPU cached, so 40-rich gallery remains fast.
                 # Hit rectangles are independent of procedural geometry.
-                preview_phase=phase if (selected or self._hover==('pattern',ident)) and theme.motion!='OFF' else 0.
-                card_theme=replace(theme,pattern_strength=theme.pattern_strength*.87)
+                preview_phase=(phase if not card_material_ok and
+                               (selected or self._hover==('pattern',ident)) and
+                               theme.motion!='OFF' else 0.)
                 p.pattern(ident,cx+7,cy+31,size-14,card_h-39,card_theme,preview_phase,preview=True)
                 if selected:
                     p.box(cx+7,cy+card_h-8,size-14,2.,(*theme.accent,.78),None,rad=1.)

@@ -3,6 +3,7 @@
 Purely observational GPU draw handlers. No mesh/edit state is modified during
 rendering, highlighting, picking, or framing. Blender GPU must run on UI thread.
 """
+from ...extension_compat import addon_key
 import math
 import json
 import time
@@ -66,7 +67,7 @@ SIDE_COLORS = {"A": (1.0, .47, .33), "B": (.35, .91, .78)}
 def _appearance_theme():
     try:
         addons=bpy.context.preferences.addons
-        item=addons.get('issmaker_modeling_assistant')
+        item=addons.get(addon_key())
         return _theme_engine.from_preferences(item.preferences if item else None)
     except (AttributeError, ReferenceError, RuntimeError, TypeError):
         return _theme_engine.from_values({})
@@ -528,7 +529,7 @@ def _draw_geometry():
 
 def _display_profile():
     try:
-        addon=bpy.context.preferences.addons.get('issmaker_modeling_assistant')
+        addon=bpy.context.preferences.addons.get(addon_key())
         return _ui_profile(addon.preferences if addon else None)
     except (AttributeError,RuntimeError,ReferenceError):
         return _ui_profile(None)
@@ -775,7 +776,7 @@ def _draw_footer(settings, region, shader, batch_for_shader, has_data, stale):
     window_visibility.reserve_fixed(scope,'COLLISION_FOOTER',(left,bottom,right,top))
     _rect(left+2*k,bottom-3*k,width,height,(0,0,0,.28),shader,batch_for_shader)
     _ui_surface(left,bottom,width,height,_shell.surface(_appearance_theme())['panel'],shader,batch_for_shader,8.*k)
-    from issmaker_modeling_assistant.appearance_gpu import draw_shared_background
+    from ...appearance_gpu import draw_shared_background
     draw_shared_background(_appearance_theme(),(left,bottom,width,height),strength_factor=.3)
     for action, label, (x,y,w,h), enabled in buttons:
         selected = action == 'COUNT'

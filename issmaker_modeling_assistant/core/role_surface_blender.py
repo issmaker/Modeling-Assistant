@@ -19,20 +19,6 @@ def _roles(obj, mesh):
         if len(attr.data)!=count or getattr(attr,'domain','')!='FACE' or getattr(attr,'data_type','')!='INT':
             raise ValueError('ROLE_WALL_METADATA_STALE')
         return ('WALL', attr.data, -1, False, None)
-    raw=obj.get('DWOS_glass_roles') or obj.get('DWOS_face_roles')
-    if raw is not None:
-        try: roles=json.loads(raw)
-        except (TypeError,ValueError) as exc:raise ValueError('ROLE_DWOS_METADATA_INVALID') from exc
-        if not isinstance(roles,list) or len(roles)!=count or not all(isinstance(x,str) for x in roles):
-            raise ValueError('ROLE_DWOS_METADATA_STALE')
-        master = obj if obj.get('DWOS_interior_sign') is not None else obj.parent
-        sign = master.get('DWOS_interior_sign') if master is not None else None
-        if sign not in (-1,1):
-            # No dependable anchor; do not pretend the default is factual.
-            return ('DWOS', tuple('UNKNOWN' for _ in roles), -1, True,
-                    'DWOS_INTERIOR_SIGN_MISSING')
-        adaptive_type=str(master.get('DWOS_adaptive_classification','')).upper()
-        return ('DWOS',tuple(roles),int(sign),adaptive_type in {'CORNER','CURVED'},None)
     return ('UNKNOWN',(),-1,False,'FACE_ROLES_NOT_PUBLISHED')
 
 

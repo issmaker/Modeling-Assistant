@@ -1,4 +1,4 @@
-"""W58.31 shared Brick Hole/DWOS geometric contact classification.
+"""W58.31 shared modeling tool geometric contact classification.
 
 This is intentionally a *very narrow* proof, not an AABB or broad tolerance.
 A pair of independent, non-coplanar faces that touch at ONE identical authored

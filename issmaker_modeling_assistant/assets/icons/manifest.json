@@ -1,5 +1,8 @@
 {
   "size": 128,
+  "format": "A8_LUMA_ZLIB",
+  "official_blender_tag": "v4.5.5",
+  "source_manifest": "../icons_blender_svg/source_manifest.json",
   "icons": [
     "MOD_PHYSICS",
     "SHADING_SOLID",
@@ -23,5 +26,174 @@
     "ISS_TOOLS",
     "ISS_SPLIT"
   ],
-  "format": "A8_LUMA_ZLIB"
+  "items": [
+    {
+      "symbol": "MOD_PHYSICS",
+      "blender_icon": "MOD_PHYSICS",
+      "svg_sha256": "004cb0a0da005df33b2cdcbf434906f6b87c70ca59256dbf276842cb606b7710",
+      "mask_sha256": "af0d823cceec2614c283c455920452709c400b895d67c11f009b481a778fec12",
+      "visible_pixels": 4650,
+      "compressed_bytes": 900
+    },
+    {
+      "symbol": "SHADING_SOLID",
+      "blender_icon": "SHADING_SOLID",
+      "svg_sha256": "5c44c75ebf53d05a0853eb4528ce637fc13c1cb4cb0f1746e68cb12820b0ea0b",
+      "mask_sha256": "31333c77ec7aaac3a7270ee1fff4884ab06760c29994fa1a065241033714bc7b",
+      "visible_pixels": 10004,
+      "compressed_bytes": 1378
+    },
+    {
+      "symbol": "AUTOMERGE_ON",
+      "blender_icon": "AUTOMERGE_ON",
+      "svg_sha256": "de82dadafe84bed983241cccf0ddd46e5826e56d6551e698e169ecf462f57540",
+      "mask_sha256": "944b212c00116f119bae52309572e70a970918f285afb09e96a5516511a77d12",
+      "visible_pixels": 3976,
+      "compressed_bytes": 703
+    },
+    {
+      "symbol": "NORMALS_FACE",
+      "blender_icon": "NORMALS_FACE",
+      "svg_sha256": "a44997e91c3ba1cee3ee6f66759f798189a708e57323f1046523d2b3ca94d6f9",
+      "mask_sha256": "ae3862b661e25ce36913a42415a8e009070b7e5519ed85efa6c39808d625db9d",
+      "visible_pixels": 3696,
+      "compressed_bytes": 861
+    },
+    {
+      "symbol": "MOD_WIREFRAME",
+      "blender_icon": "MOD_WIREFRAME",
+      "svg_sha256": "500c9618ae808dad463158e2015634e6471d38cf09cee7b2407ebe1a07242db3",
+      "mask_sha256": "7148d983d85444e61c94e92181ed59138f859359a96ea45a8c774a1201912596",
+      "visible_pixels": 5351,
+      "compressed_bytes": 535
+    },
+    {
+      "symbol": "MOD_SMOOTH",
+      "blender_icon": "MOD_SMOOTH",
+      "svg_sha256": "0ca02bd9a0fe3fb90b180c4abb0e792622cfc1ad1f1bb3a8f1517eb884c2e478",
+      "mask_sha256": "4bf00aa8ecaa4002c1b0bad73ab4a23fe9767e5e5563230220046000023ddc36",
+      "visible_pixels": 3016,
+      "compressed_bytes": 872
+    },
+    {
+      "symbol": "UV_SYNC_SELECT",
+      "blender_icon": "UV_SYNC_SELECT",
+      "svg_sha256": "302dceeccb8a553a3367d41bae1126c317fa2ad986dbf10fecec15f1b8ee648a",
+      "mask_sha256": "7d2e14f24c7a97b57cd1f9f9e4322a5743c9cfeafa0ccb66d506cb5b11268fb3",
+      "visible_pixels": 2720,
+      "compressed_bytes": 603
+    },
+    {
+      "symbol": "LINKED",
+      "blender_icon": "LINKED",
+      "svg_sha256": "e9179cafda0316f78afec0115b60a14277137130b87fe287e9473e2cffa854f7",
+      "mask_sha256": "494a223ba3729968f593fb0d21bf798da6ca4460f4325a213cc0310183adaac3",
+      "visible_pixels": 3119,
+      "compressed_bytes": 1433
+    },
+    {
+      "symbol": "UV_DATA",
+      "blender_icon": "UV_DATA",
+      "svg_sha256": "337bed8cbec55f0e788f769cefd4b21d00aa083e3f73fa4edb7a0298dfc8e96f",
+      "mask_sha256": "a3fce7ba5ced331fb72e9eb18dd059922a7f4bfd597903f183ddb8504125f413",
+      "visible_pixels": 5230,
+      "compressed_bytes": 368
+    },
+    {
+      "symbol": "NODE_MATERIAL",
+      "blender_icon": "NODE_MATERIAL",
+      "svg_sha256": "fa7c62469497c59eb1fc9e7c2c1b94b7fb4e1134a46be0f5de2b2a907fa21438",
+      "mask_sha256": "05b04bc4cf1e566bd350ad573dc30c6b46ad5fc23b1ed84bc4399505edab201d",
+      "visible_pixels": 3699,
+      "compressed_bytes": 1808
+    },
+    {
+      "symbol": "PIVOT_BOUNDBOX",
+      "blender_icon": "PIVOT_BOUNDBOX",
+      "svg_sha256": "fcd63f6798b318c094785cfc567f675e0428694d61078fbc4df0e70bd7e162dc",
+      "mask_sha256": "99fb1e6d38471cdae40de71d6f00df75d58d5600365330a197d72ad08734a215",
+      "visible_pixels": 3264,
+      "compressed_bytes": 645
+    },
+    {
+      "symbol": "MOD_UVPROJECT",
+      "blender_icon": "MOD_UVPROJECT",
+      "svg_sha256": "d380d1002edebfc1f351669d7b0f1335bcf61b93057bda0114616a0e040c9341",
+      "mask_sha256": "f500b4572e10875308dcc231d00e7fe40586d1169337346d73974bd94ab7ccb5",
+      "visible_pixels": 4870,
+      "compressed_bytes": 366
+    },
+    {
+      "symbol": "VIEWZOOM",
+      "blender_icon": "VIEWZOOM",
+      "svg_sha256": "5b4b490b32c6333b1add8743f9ba3d4f2325f08a7bfa9a77071c8fe44fb8b221",
+      "mask_sha256": "b25278d650087146270962bb7bf1454db1737c8dba40a61a88d968f17520a203",
+      "visible_pixels": 2573,
+      "compressed_bytes": 1265
+    },
+    {
+      "symbol": "TRASH",
+      "blender_icon": "TRASH",
+      "svg_sha256": "9a5afe73d1d1b3175c207e2c5444df284636539a4c03e0214d1b9a87ff3bdcac",
+      "mask_sha256": "562599b4348486d82b02360a999b369a6d057da1c3ab8287f1ee45c41cdb3563",
+      "visible_pixels": 4226,
+      "compressed_bytes": 585
+    },
+    {
+      "symbol": "X",
+      "blender_icon": "X",
+      "svg_sha256": "7f0ae571ac217e45f033f8ac4fe46a499a521b6ca6e908ddb83ee3410a9f5c58",
+      "mask_sha256": "c55b91e3676fbe739304b4a1e57702bd430ba1877a0b96b69b427f67e7f4794c",
+      "visible_pixels": 3535,
+      "compressed_bytes": 665
+    },
+    {
+      "symbol": "BACK",
+      "blender_icon": "BACK",
+      "svg_sha256": "8970e9ee25818b70b6e217cc8c4b9349c4a65afb8d766e0bb0ec30d0df496cf7",
+      "mask_sha256": "b70a9f1467e132d14a8b71a16bc5c2241dbab9f93c6d5a1f90a0d5825939b4b3",
+      "visible_pixels": 1833,
+      "compressed_bytes": 293
+    },
+    {
+      "symbol": "NEXT",
+      "blender_icon": "FORWARD",
+      "svg_sha256": "3b043cd19674cd4170557d018691f489edc2c83a4fce31ea65ae6343645b8473",
+      "mask_sha256": "7eaa75055204095d0d0ee8e2684f2ea6dff0701ad3a48dc66a615d8988420d74",
+      "visible_pixels": 1795,
+      "compressed_bytes": 285
+    },
+    {
+      "symbol": "CHECK",
+      "blender_icon": "CHECKMARK",
+      "svg_sha256": "a9192f3d01de6e583476a3ce72668dd0b67e946a0b641b03c9499ce7f52b1dfa",
+      "mask_sha256": "082226a2913d530b8c90114430cab8014b7ec21dfd750baa2a8aec9702f019d6",
+      "visible_pixels": 3078,
+      "compressed_bytes": 538
+    },
+    {
+      "symbol": "RADIAL",
+      "blender_icon": "MENU_PANEL",
+      "svg_sha256": "b49f020316f1afa80aad667f488b3cce4316a39ba97b615438a94c996a11d35a",
+      "mask_sha256": "7c2a0e466305c79b97eaf0a4954e2767ad715f4c6c9fc510300b76cbe1a6f541",
+      "visible_pixels": 4644,
+      "compressed_bytes": 300
+    },
+    {
+      "symbol": "ISS_TOOLS",
+      "blender_icon": "TOOL_SETTINGS",
+      "svg_sha256": "68c65ffea0c3195d7981fb9984c8c7554978bcc4f045e10e8049ec81b08efb70",
+      "mask_sha256": "53e139649e7dcef86d0ac56ae675ade3e240b67cd44d9a3d9f08b47334a4f120",
+      "visible_pixels": 5490,
+      "compressed_bytes": 916
+    },
+    {
+      "symbol": "ISS_SPLIT",
+      "blender_icon": "MOD_EDGESPLIT",
+      "svg_sha256": "52e61c189cf3ac06d537058f790a7bbc7827dd67752df702497871a132798f41",
+      "mask_sha256": "a230b3749082749221327ef471a42bd1dbb97c1e8ae2100bdd33a595ffef1429",
+      "visible_pixels": 4084,
+      "compressed_bytes": 395
+    }
+  ]
 }

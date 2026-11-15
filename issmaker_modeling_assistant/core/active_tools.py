@@ -2,33 +2,13 @@
 import bpy
 from . import session_switch, window_visibility
 from .. import modeling_tools
-from ..tools import brick_hole as brick
 from ..tools import collision_inspector as collision
-from ..tools.brick_hole import integration as brick_i
 from ..tools.collision_inspector import viewport_ui as collision_ui
 from ..tools.uv_wall import integration as wall_i
-from ..tools.dwos_windows import integration as dwos_i
-from ..tools.dwos_windows import native as dwos
 
 
-def _brick_active():
-    from ..tools.brick_hole import issue_inspector, seam_inspector
-    # Fixture navigator owns a separate GPU handler; stopping Preview alone
-    # previously left it running after handoff to a different tool.
-    return bool(brick_i.is_preview_active() or issue_inspector.is_active() or seam_inspector.is_active() or
-                getattr(brick, '_FIXTURE_NAV_HUD', None) is not None)
 
 
-def _stop_brick(context):
-    brick.stop_interactive_preview()
-    brick.stop_fixture_nav_hud()
-    from ..tools.brick_hole import issue_inspector, seam_inspector
-    issue_inspector.stop()
-    seam_inspector.stop()
-    stopped = not _brick_active()
-    if stopped:
-        window_visibility.invalidate_matching('BRICK_')
-    return stopped
 
 
 def _collision_active(context):
@@ -130,18 +110,8 @@ def _stop_wall(context):
     return stopped
 
 
-def _dwos_active():
-    return bool(getattr(dwos.composer, '_ACTIVE', None))
 
 
-def _stop_dwos(context):
-    # Native API disarms draw and marks the existing modal for FINISHED on its
-    # next event. It does not accept or commit a partially edited numeric field.
-    dwos.composer.remove_active_draw_handler()
-    stopped = not _dwos_active()
-    if stopped:
-        window_visibility.invalidate_matching('DWOS_')
-    return stopped
 
 
 def _quick_select_active():
@@ -159,10 +129,8 @@ def _stop_quick_select(context):
 def ownership_snapshot(context):
     """Tool-specific active flags only. No BMesh reads or object mutations."""
     getters = (
-        ('BRICK_HOLE', _brick_active),
         ('COLLISION', lambda: _collision_active(context)),
         ('UV_WALL', lambda: _wall_active(context)),
-        ('DWOS', _dwos_active),
         ('QUICK_SELECT', _quick_select_active),
     )
     result = {}
@@ -178,10 +146,8 @@ def ownership_snapshot(context):
 def switch_to(tool_id, context):
     """Close all other tools BEFORE target can_start; even rejected targets close previous."""
     adapters=(
-        ('BRICK_HOLE', _brick_active, _stop_brick),
         ('COLLISION', lambda: _collision_active(context), _stop_collision),
         ('UV_WALL', lambda: _wall_active(context), _stop_wall),
-        ('DWOS', _dwos_active, _stop_dwos),
         ('QUICK_SELECT', _quick_select_active, _stop_quick_select),
     )
     return session_switch.stop_others(tool_id, context, adapters)

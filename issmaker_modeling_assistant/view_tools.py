@@ -8,6 +8,7 @@ from bpy.types import Operator
 
 from . import log, runtime, selection_core, uv_feedback, issue_nav_core, history_guard
 from .core.uv_flip_detection import classify_uv_polygon, mesh_uv_states, bmesh_face_uv_state
+from .core.uv_flip_v2 import analyze_mesh_uv, analyze_bmesh_uv
 
 
 _VIEW_STATES = {}
@@ -22,6 +23,7 @@ _ISSUE_INDEX = -1
 _ISSUE_KIND = None
 _ISSUE_CURRENT = None
 _ISSUE_THRESHOLD = None
+_ISSUE_REASONS = {}
 _ISSUE_NAV_STATUS = 'NO_SESSION'
 _ISSUE_NAV_REASON = ''
 _ISSUE_SESSION_COUNTER = 0
@@ -243,6 +245,7 @@ def issue_navigation_status():
         'stored': len(_ISSUES),
         'initial_found': _ISSUE_INITIAL_COUNT,
         'current_face': (_ISSUE_CURRENT[1] if _ISSUE_CURRENT is not None else None),
+        'current_reasons': tuple(_ISSUE_REASONS.get(_ISSUE_CURRENT[1],())) if _ISSUE_CURRENT is not None else (),
         'position': (_ISSUE_INDEX + 1 if _ISSUE_INDEX >= 0 else 0),
     }
 
@@ -743,7 +746,13 @@ def _flipped_face_indexes(obj):
     if layer is None:
         return None
     uv_data = layer.data
-    return [index for index,state in mesh_uv_states(mesh).items() if state=='FLIPPED']
+    result=analyze_mesh_uv(mesh)
+    if not result['complete']:
+        raise ValueError("UV-анализ достиг лимита точных пересечений")
+    return sorted(i for i,codes in result['issues'].items() if
+                  any(code in codes for code in (
+                      'LOCAL_WINDING_OUTLIER','SELF_CROSSING_FACE',
+                      'DEGENERATE_FACE')))
 
 
 def _select_face_sets(context, affected, select_one=None):
@@ -794,9 +803,14 @@ def _analysis_selection_snapshot(context, obj):
         "vert_flags": bytes(int(v.select) for v in bm.verts),
         "edge_flags": bytes(int(e.select) for e in bm.edges),
         "face_flags": bytes(int(f.select) for f in bm.faces),
-        "uv_flags": tuple(bytes((int(l[layer].select) |
-                                 (int(getattr(l[layer], 'select_edge', False)) << 1))
-                                for l in f.loops) for f in bm.faces),
+        "uv_flags": tuple(bytes((int(vertex) | (int(edge) << 1))
+                                for vertex,edge in
+                                (selection_core.uv_flags(loop,layer)
+                                 for loop in f.loops))
+                           for f in bm.faces),
+        "uv_face_flags": bytes(
+            int(selection_core.uv_face_flag(face,layer))
+            for face in bm.faces),
         "active_face": bm.faces.active.index if bm.faces.active else None,
         "select_mode": tuple(context.tool_settings.mesh_select_mode),
         "topology": selection_core.topology_fingerprint(bm),
@@ -856,10 +870,9 @@ def _select_analysis_faces(context, obj, indexes):
     if layer is not None and not context.tool_settings.use_uv_select_sync:
         for face in bm.faces:
             is_issue = face.index in wanted
+            selection_core.set_uv_face_flag(face,layer,is_issue)
             for loop in face.loops:
-                loop[layer].select = is_issue
-                if hasattr(loop[layer], 'select_edge'):
-                    loop[layer].select_edge = is_issue
+                selection_core.set_uv_flags(loop,layer,is_issue,is_issue)
     bmesh.update_edit_mesh(obj.data, loop_triangles=False, destructive=False)
 
 
@@ -922,12 +935,16 @@ def _restore_analysis_selection(context, state):
         vert.select = bool(flag)
     for edge, flag in zip(bm.edges, state["edge_flags"]):
         edge.select = bool(flag)
-    for face, flag, saved in zip(bm.faces, state["face_flags"], state["uv_flags"]):
-        face.select = bool(flag)
-        for loop, uv_flag in zip(face.loops, saved):
-            loop[layer].select = bool(uv_flag & 1)
-            if hasattr(loop[layer], 'select_edge'):
-                loop[layer].select_edge = bool(uv_flag & 2)
+    face_uv_flags=state.get("uv_face_flags")
+    for i,(face,flag,saved) in enumerate(
+            zip(bm.faces,state["face_flags"],state["uv_flags"])):
+        face.select=bool(flag)
+        if face_uv_flags is not None:
+            selection_core.set_uv_face_flag(
+                face,layer,bool(face_uv_flags[i]))
+        for loop,uv_flag in zip(face.loops,saved):
+            selection_core.set_uv_flags(
+                loop,layer,bool(uv_flag & 1),bool(uv_flag & 2))
     bm.faces.active = (bm.faces[state["active_face"]]
                        if state["active_face"] is not None else None)
     bm.select_history.clear()
@@ -962,7 +979,7 @@ def _store_issues(kind, affected, threshold=None):
 
 def _finish_analysis(context, restore_selection=True):
     global _ISSUES, _ISSUE_INDEX, _ISSUE_KIND, _ANALYSIS_STATE
-    global _ISSUE_CURRENT, _ISSUE_THRESHOLD, _ISSUE_INITIAL_COUNT
+    global _ISSUE_CURRENT, _ISSUE_THRESHOLD, _ISSUE_INITIAL_COUNT, _ISSUE_REASONS
     global _ANALYSIS_EXPECTED_SELECTION, _ANALYSIS_SELECTION_TOUCHED
     _set_navigation_status('NO_SESSION')
     uv_feedback.clear()
@@ -991,6 +1008,7 @@ def _finish_analysis(context, restore_selection=True):
         _ISSUE_KIND = None
         _ISSUE_CURRENT = None
         _ISSUE_THRESHOLD = None
+        _ISSUE_REASONS = {}
         _ISSUE_INITIAL_COUNT = 0
 
 
@@ -1162,6 +1180,7 @@ class _UVAnalysisModal:
         log.write(f"UV {self.analysis_kind.lower()} cancelled")
 
     def modal(self, context, event):
+        global _ISSUE_REASONS
         # Undo/load/unregister can remove the timer before the modal handler
         # receives its final event. Leave immediately without touching a
         # possible newer analysis run.
@@ -1207,13 +1226,25 @@ class _UVAnalysisModal:
             if not self._found:
                 _finish_analysis(context, restore_selection=False)
                 log.write(f"UV {self.analysis_kind.lower()}: none; faces={self._total}")
-                message = "Перевёрнутых UV-граней не найдено" if self.analysis_kind == 'FLIPPED' else "Проблемных граней не найдено"
+                message = "Локальных UV flip не найдено" if self.analysis_kind == 'FLIPPED' else "Проблемных граней не найдено"
                 if self.analysis_kind == 'FLIPPED' and self._unverified_faces:
                     message += f"; НЕ ПРОВЕРЕНО вырожденных/перекрученных UV-контуров: {self._unverified_faces}"
                 self.report({'WARNING'} if self.analysis_kind == 'FLIPPED' and self._unverified_faces
                             else {'INFO'}, message)
                 return {'FINISHED'}
             affected = [(self._object, set(self._found))]
+            if self.analysis_kind=='FLIPPED':
+                _ISSUE_REASONS={fi:tuple(self._flip_states.get(fi,()))
+                                for fi in self._found}
+                log.write(
+                    "UV_FLIP_V2_DIAGNOSTICS "
+                    +str({'local_faces':tuple(self._found),
+                          'causes':_ISSUE_REASONS,
+                          'advisory_mirrored_islands':
+                              self._flip_report['mirrored_islands_advisory'],
+                          'unresolved_islands':self._flip_report['unresolved_islands'],
+                          'overlap_pairs':self._flip_report['overlap_pairs'][:100],
+                          'complete':self._flip_report['complete']}))
             threshold = self.threshold if self.analysis_kind == 'STRETCH' else None
             _store_issues(self.analysis_kind, affected, threshold=threshold)
             # Shared immutable UV + 3D feedback. No selection changes.
@@ -1288,20 +1319,31 @@ class IMA_OT_SelectFlipped(_UVAnalysisModal, Operator):
         start = polygon.loop_start
         coords = [self._uv_data[start + offset].uv
                   for offset in range(polygon.loop_total)]
-        if self._flip_states is None:self._flip_states=mesh_uv_states(self._mesh)
-        state = self._flip_states.get(polygon.index,'UNVERIFIED')
-        if state in {'DEGENERATE', 'UNVERIFIED'}:
+        if self._flip_states is None:
+            result=analyze_mesh_uv(self._mesh)
+            if not result['complete']:
+                raise RuntimeError(
+                    "Точный UV-анализ достиг лимита пар треугольников")
+            self._flip_report=result
+            self._flip_states=result['issues']
+        problems=self._flip_states.get(polygon.index,())
+        if ('FOLDED_OR_AMBIGUOUS' in problems
+                or 'ISLAND_INTERIOR_OVERLAP' in problems):
             self._unverified_faces += 1
-        return state == 'FLIPPED'
+        # Consistently mirrored UV islands are advisory, not errors.
+        return any(code in problems for code in (
+            'LOCAL_WINDING_OUTLIER','SELF_CROSSING_FACE',
+            'DEGENERATE_FACE'))
 
 
-def _live_issue_matches(face, layer, kind, threshold):
+def _live_issue_matches(face, layer, kind, threshold, *, v2_codes=None):
     """Read only the current Edit BMesh; never silently turn read errors into False."""
     if kind == 'FLIPPED':
-        state = bmesh_face_uv_state(face,layer)
-        if state in {'DEGENERATE', 'UNVERIFIED'}:
-            raise ValueError('UV-контур вырожден или перекрещен; Flip не подтверждён')
-        return state == 'FLIPPED'
+        if v2_codes is None:
+            raise ValueError("Нет проверки UV-острова в контексте Edit Mode")
+        return any(code in v2_codes.get(face.index,()) for code in (
+            'LOCAL_WINDING_OUTLIER','SELF_CROSSING_FACE',
+            'DEGENERATE_FACE'))
     if kind != 'STRETCH':
         raise ValueError('неизвестный тип UV-анализа: %r' % kind)
     # The scanner deliberately skips N-gons. Its live validator must agree.
@@ -1345,13 +1387,22 @@ def _verify_live_issues(context):
             return ('STALE', list(_ISSUES), 0, 'Активная UV-карта недоступна', None, None)
         if selection_core.topology_fingerprint(bm) != _ANALYSIS_STATE['topology']:
             return ('STALE', list(_ISSUES), 0, 'Топология изменилась; повторите анализ', None, None)
+        v2_codes=None
+        if _ISSUE_KIND=='FLIPPED':
+            audit=analyze_bmesh_uv(bm,layer)
+            if not audit['complete']:
+                return ('UNREADABLE', list(_ISSUES), 0,
+                        "Превышен лимит точной UV-проверки",None,None)
+            v2_codes=audit['issues']
         def verify(item):
             item_obj, index = item
             if item_obj != obj:
                 raise ValueError('полигон принадлежит другому объекту')
             if index < 0 or index >= len(bm.faces):
                 raise IndexError('индекс полигона вне актуальной топологии')
-            return _live_issue_matches(bm.faces[index], layer, _ISSUE_KIND, _ISSUE_THRESHOLD)
+            return _live_issue_matches(bm.faces[index], layer,
+                                       _ISSUE_KIND, _ISSUE_THRESHOLD,
+                                       v2_codes=v2_codes)
         status, survivors, checked, reason = issue_nav_core.verify_issues(
             _ISSUES, verify)
         return status, survivors, checked, reason, bm, layer
@@ -1474,8 +1525,14 @@ class IMA_OT_IssueNavigate(Operator):
         log.write('UV NAV sid=%s action=ARROW result=VALID kind=%s face=%d position=%d/%d checked=%d focus=%s selection_changed=false'
                   % (sid, _ISSUE_KIND, issue[1], _ISSUE_INDEX + 1,
                      len(remaining), checked, focus))
-        self.report({'INFO'}, 'Проблема %d из %d (полигон %d)'
-                    % (_ISSUE_INDEX + 1, len(remaining), issue[1]))
+        causes=_ISSUE_REASONS.get(issue[1],())
+        labels={'LOCAL_WINDING_OUTLIER':'локальный разворот UV',
+                'SELF_CROSSING_FACE':'самопересечение UV',
+                'DEGENERATE_FACE':'вырожденная UV-грань',
+                'ISLAND_INTERIOR_OVERLAP':'наложение внутри острова'}
+        detail=', '.join(labels.get(code,code) for code in causes) or 'UV-проблема'
+        self.report({'INFO'}, 'Проблема %d/%d · полигон %d · %s'
+                    % (_ISSUE_INDEX + 1,len(remaining),issue[1],detail))
         return {'FINISHED'}
 
 

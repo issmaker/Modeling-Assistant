@@ -20,29 +20,26 @@ FIELDS = (
     'ui_pattern_speed','ui_pattern_density','ui_pattern_opacity',
     'ui_pattern_contrast','ui_pattern_glow','ui_pattern_softness',
     'ui_studio_pos_x','ui_studio_pos_y','ui_studio_tab','ui_studio_collapsed',
-    'ui_dwos_hud_custom','ui_dwos_hud_pinned','ui_dwos_hud_x','ui_dwos_hud_y',
     'ui_wall_workspace_pos_x','ui_wall_workspace_pos_y','ui_wall_workspace_user_moved',
     'ui_motion_quality','ui_reduced_motion',
     'font_scale','window_scale','hud_display_preset','button_scale','density','ui_debug_bounds','ui_render_quality',
-    'radial_center_cursor','ui_mode','dock_sizing','dock_manual_width','dock_manual_height',
+    'radial_center_cursor',
     'show_uv_issue_overlay','overlay_opacity','show_3d_issue_overlay','overlay_3d_fill','overlay_3d_xray',
 )
 ENUMS = {'hud_display_preset':('AUTO','QHD','UHD'), 'ui_render_quality':('ULTRA','HIGH','BALANCED','PERFORMANCE'), 'accent':tuple(ACCENTS), 'ui_scheme':tuple(x.upper() for x in SCHEMES), 'ui_surface':tuple(x.upper() for x in SURFACES),
          'ui_pattern':tuple(x.upper() for x in PATTERNS), 'ui_motion_quality':('OFF','BALANCED','RICH'),
-         'ui_studio_tab':('GALLERY','DESIGN','TOOLS'), 'density':('COMFORT','COMPACT'), 'ui_mode':('FLOATING_PRO','STUDIO_DOCK'),
-         'dock_sizing':('AUTO','MANUAL')}
+         'ui_studio_tab':('GALLERY','DESIGN','TOOLS'), 'density':('COMFORT','COMPACT')}
 LIMITS = {'font_scale':(.75,2.),'window_scale':(.75,2.),
     'ui_pattern_strength':(0.,1.),'ui_pattern_scale':(.25,4.),
     'ui_pattern_density':(.25,2.5),'ui_pattern_opacity':(0.,1.),
     'ui_pattern_contrast':(.1,2.),'ui_pattern_glow':(0.,1.),
     'ui_pattern_softness':(0.,1.), 'ui_studio_pos_x':(0.,1.),
-    'ui_studio_pos_y':(0.,1.),'ui_dwos_hud_x':(0.,1.),'ui_dwos_hud_y':(0.,1.),'ui_wall_workspace_pos_x':(0.,1.),
+    'ui_studio_pos_y':(0.,1.),'ui_wall_workspace_pos_x':(0.,1.),
     'ui_wall_workspace_pos_y':(0.,1.),
     'ui_pattern_amplitude':(0.,2.),'ui_pattern_parallax':(0.,1.),
     'ui_pattern_relief':(0.,1.),'ui_pattern_speed':(0.,3.),
-    'button_scale':(.8,1.3),'overlay_opacity':(.25,1.),'overlay_3d_fill':(.25,.92),
-    'dock_manual_width':(280,520),'dock_manual_height':(344,1100)}
-BOOLS = {'ui_dwos_hud_custom','ui_dwos_hud_pinned','ui_wall_workspace_user_moved','ui_studio_collapsed','ui_custom_accent','ui_reduced_motion','ui_debug_bounds','radial_center_cursor','show_uv_issue_overlay','show_3d_issue_overlay','overlay_3d_xray'}
+    'button_scale':(.8,1.3),'overlay_opacity':(.25,1.),'overlay_3d_fill':(.25,.92)}
+BOOLS = {'ui_wall_workspace_user_moved','ui_studio_collapsed','ui_custom_accent','ui_reduced_motion','ui_debug_bounds','radial_center_cursor','show_uv_issue_overlay','show_3d_issue_overlay','overlay_3d_xray'}
 COLORS = {'ui_accent_color','ui_secondary_color'}
 
 
@@ -77,9 +74,6 @@ def _validate(data):
             if not isinstance(value,(list,tuple)) or len(value)!=3 or any(isinstance(v,bool) or not isinstance(v,(int,float)) or not isfinite(v) or not 0<=v<=1 for v in value):
                 raise ValueError('bad color: '+key)
             value=list(value)
-        if key in {'dock_manual_width','dock_manual_height'}:
-            if not float(value).is_integer():raise ValueError('bad integer dimension')
-            value=int(value)
         clean[key]=value
     from_values(clean) # sanity resolver must also stay pure
     return clean
@@ -94,7 +88,7 @@ def serialize_preferences(prefs):
     def value(k):
         v=getattr(prefs,k)
         if k in COLORS:return [float(x) for x in v]
-        if k in LIMITS:return int(v) if k in {'dock_manual_width','dock_manual_height'} else float(v)
+        if k in LIMITS:return float(v)
         if k in BOOLS:return bool(v)
         return str(v)
     return _validate({k:value(k) for k in FIELDS})
@@ -154,6 +148,7 @@ def migrate_legacy(prefs):
     old=str(getattr(prefs,'ui_theme','OBSIDIAN')).upper()
     scheme={'OBSIDIAN':'obsidian','BLUEPRINT':'cobalt',
             'TITANIUM':'sand','EMBER':'copper'}.get(old,'obsidian')
-    # Some older UV WALL sessions have local animation disabled.
-    motion='OFF' if getattr(prefs,'dock_animation','ON')=='OFF' else 'BALANCED'
+    # Removed Dock preferences cannot override active global motion settings.
+    motion=str(getattr(prefs,'ui_motion_quality','BALANCED')).upper()
+    if motion not in ('OFF','BALANCED','RICH'):motion='BALANCED'
     return {'ui_scheme':scheme.upper(),'ui_motion_quality':motion}

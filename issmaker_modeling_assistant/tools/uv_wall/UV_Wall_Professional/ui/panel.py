@@ -50,7 +50,7 @@ CORNER_UID_ATTRIBUTE = "uvwall_corner_uid"
 
 
 bl_info = {'version': (1, 17, 5)}
-from .preferences import active_ui_mode, get_preferences
+from .preferences import get_preferences
 
 class VIEW3D_PT_uv_wall(bpy.types.Panel):
     bl_label = "UV Wall"
@@ -79,8 +79,7 @@ class VIEW3D_PT_uv_wall(bpy.types.Panel):
         row.label(text=f"UV WALL · {VERSION_STRING}", icon="VIEW3D")
         if active:
             row.label(text="LIVE", icon="CHECKMARK")
-        if prefs is not None:
-            head.prop(prefs, "ui_mode", text="Интерфейс")
+        head.label(text="Floating Pro", icon="WINDOW")
 
         project = layout.box()
         project.label(text="ПРОЕКТ", icon="OUTLINER_OB_MESH")
@@ -98,6 +97,16 @@ class VIEW3D_PT_uv_wall(bpy.types.Panel):
             obj = bpy.data.objects.get(name) if name else None
             project.label(text="Result: " + ("готов" if obj else "не построен"),
                           icon="CHECKMARK" if obj else "INFO")
+
+        material_controls = project.row(align=True)
+        material_controls.operator("object.uv_wall_create_material",
+                                   text="Создать PBR материал", icon="MATERIAL")
+        if definition is not None:
+            slot=("virtual_material_2k" if str(definition.module_standard)=="2"
+                  else "virtual_material_4k")
+            current=getattr(definition,slot,None)
+            if current is not None:
+                project.label(text="Материал: "+current.name,icon="CHECKMARK")
 
         launch = layout.box()
         row = launch.row()

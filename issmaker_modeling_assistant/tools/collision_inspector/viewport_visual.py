@@ -127,10 +127,10 @@ def group_menu_rect(width, height, can_repair=False, *, scale=1.0, scope=None):
     The previous fixed footer anchor could cover the bottom-left issue card
     at ordinary viewport widths.  Never use a partially colliding fallback.
     """
-    from issmaker_modeling_assistant.core.overlay_placement import StrictOverlayAllocator
+    from ...core.overlay_placement import StrictOverlayAllocator
     buttons = footer_controls(width,height,can_repair=can_repair,scale=scale)
     if not buttons:
-        from issmaker_modeling_assistant.core import window_visibility
+        from ...core import window_visibility
         window_visibility.observe(scope,"COLLISION_GROUP_MENU",None)
         return None
     gx, gy, gw, gh = next(rect for action, _name, rect, _enabled in buttons if action == 'GROUP')
@@ -144,7 +144,7 @@ def group_menu_rect(width, height, can_repair=False, *, scale=1.0, scope=None):
     manager.reserve('FOOTER',(left,bottom,right,top))
     # Pass 15.9: group menu is also an allocated peer, not a private popup.
     # Both draw and hit_group_menu call this identical pure placement function.
-    from issmaker_modeling_assistant.core import window_visibility
+    from ...core import window_visibility
     for peer_key, peer_rect in window_visibility.peer_rectangles(scope,'COLLISION_GROUP_MENU'):
         manager.reserve('peer:' + peer_key, peer_rect)
     card=hud_rect(width,height,has_data=True,scale=k)
@@ -157,7 +157,7 @@ def group_menu_rect(width, height, can_repair=False, *, scale=1.0, scope=None):
         tx,ty,tw,th=toolbar
         manager.reserve('MARKER_MENU_LANE',(tx,ty,tx+tw,ty+th))
     result=manager.place('GROUP_MENU',(mw,mh),(gx+gw/2-mw/2,gy+gh+12*k))
-    from issmaker_modeling_assistant.core import window_visibility
+    from ...core import window_visibility
     result=window_visibility.observe(scope,'COLLISION_GROUP_MENU',result)
     if result is None:
         return None

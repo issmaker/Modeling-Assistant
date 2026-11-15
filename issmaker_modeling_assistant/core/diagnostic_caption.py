@@ -1,4 +1,4 @@
-"""Read-only diagnostic badges shared by UV Editor, 3D UV and Brick Hole.
+"""Read-only diagnostic badges shared by UV Editor, 3D UV and shared modeling tools.
 
 Pure layout logic, independent of Blender and GPU. These badges are neither
 hit targets nor geometry markers. Semantic line/fill colors remain owned by

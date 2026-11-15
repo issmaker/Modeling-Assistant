@@ -72,54 +72,6 @@
     "acceptance": "Z-маркеры, стрелки, захват, popup"
   },
   {
-    "id": "H13",
-    "name": "DWOS Window Composer",
-    "source": "tools/dwos_windows/native/composer.py",
-    "acceptance": "PAN/CORNER/CURVED, ONE/SEL/SAME/ALL/COPY"
-  },
-  {
-    "id": "H14",
-    "name": "DWOS Canvas: сплиты, scissors и профильные маркеры",
-    "source": "tools/dwos_windows/native/composer.py",
-    "acceptance": "Клик маркеров, ввода, захват окна"
-  },
-  {
-    "id": "H15",
-    "name": "DWOS 3D/View overlays",
-    "source": "tools/dwos_windows/native/viewport.py",
-    "acceptance": "Сохранить значение цвета диагностических граней"
-  },
-  {
-    "id": "H16",
-    "name": "Brick Hole Interactive HUD",
-    "source": "tools/brick_hole/__init__.py",
-    "acceptance": "Глубина, нормаль, field focus, Esc"
-  },
-  {
-    "id": "H17",
-    "name": "Brick Hole Collapsed Bar / picker",
-    "source": "tools/brick_hole/__init__.py",
-    "acceptance": "Одна видимая кнопка = одна hitbox"
-  },
-  {
-    "id": "H18",
-    "name": "Brick Hole Issue Inspector",
-    "source": "tools/brick_hole/issue_inspector.py",
-    "acceptance": "Карточка ошибки; закрытие Esc"
-  },
-  {
-    "id": "H19",
-    "name": "Brick Hole Preview + diagnostic overlays",
-    "source": "tools/brick_hole/__init__.py",
-    "acceptance": "Номера и подписи ошибок, не менять диагностические цвета"
-  },
-  {
-    "id": "H20",
-    "name": "Brick Hole Fixture HUD (тесты)",
-    "source": "tools/brick_hole/__init__.py",
-    "acceptance": "Тестовые кейсы, hitbox, Esc"
-  },
-  {
     "id": "H21",
     "name": "Collision Inspector toolbar/footer и меню",
     "source": "tools/collision_inspector/viewport_ui.py",

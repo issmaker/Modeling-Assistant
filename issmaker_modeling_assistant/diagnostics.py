@@ -1,4 +1,5 @@
 """One-click, bounded, support ZIP: no project file or image textures copied."""
+from .extension_compat import addon_key
 
 import datetime
 import io
@@ -17,29 +18,18 @@ import bmesh
 from bpy.types import Operator, Panel
 
 from . import log, runtime, view_tools, modeling_tools, ui, uv_feedback, viewport_feedback, selection_core, history_guard, weld_preview, module_visualization
+from . import ADDON_VERSION
 from .core import action_trace, registry, undo_audit, window_visibility
-from .tools import brick_hole as bh
-from .tools.brick_hole import integration as brick_integration
 from .tools.collision_inspector import integration as collision_integration
 from .tools import collision_inspector as ci
 from .tools.uv_wall import integration as uv_wall_integration
-from .tools.dwos_windows import integration as dwos_integration
 
 def _gpu_modal_lifecycle_snapshot():
     """Read-only summaries only; a failed module must not break Support ZIP."""
     result = {}
     for key, getter in (
         ('collision_inspector', lambda: __import__(
-            'issmaker_modeling_assistant.tools.collision_inspector.viewport_ui',
-            fromlist=['lifecycle_snapshot']).lifecycle_snapshot()),
-        ('dwos_overlay', lambda: __import__(
-            'issmaker_modeling_assistant.tools.dwos_windows.native.viewport',
-            fromlist=['overlay_snapshot']).overlay_snapshot()),
-        ('dwos_smart_interior', lambda: __import__(
-            'issmaker_modeling_assistant.tools.dwos_windows.native.smart_interior_auto',
-            fromlist=['queue_snapshot']).queue_snapshot()),
-        ('dwos_composer', lambda: __import__(
-            'issmaker_modeling_assistant.tools.dwos_windows.native.composer',
+            (addon_key() + '.tools.collision_inspector.viewport_ui'),
             fromlist=['lifecycle_snapshot']).lifecycle_snapshot()),
     ):
         try:
@@ -76,7 +66,7 @@ def collect_snapshot(context):
     state = {
         'schema': 'ima.diagnostics.2',
         'timestamp': datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        'addon_version': '.'.join(map(str,__import__('issmaker_modeling_assistant',fromlist=['bl_info']).bl_info['version'])),
+        'addon_version': '.'.join(map(str,ADDON_VERSION)),
         'blender_version': bpy.app.version_string,
         'python_version': sys.version,
         'os': platform.platform(),
@@ -99,10 +89,10 @@ def collect_snapshot(context):
             'global_undo_audit': undo_audit.snapshot(),
             'global_undo_lifecycle': undo_audit.lifecycle_status(),
             'gpu_modal_lifecycle': _gpu_modal_lifecycle_snapshot(),
-            'unified_tool_sessions': __import__('issmaker_modeling_assistant.core.active_tools', fromlist=['ownership_snapshot']).ownership_snapshot(context),
+            'unified_tool_sessions': __import__((addon_key() + '.core.active_tools'), fromlist=['ownership_snapshot']).ownership_snapshot(context),
             'ppa_wave_build_id': 'ISSMAKER-PPA-WAVE21-WAVE22-20261027',
-            'styled_popup_lifecycle': __import__('issmaker_modeling_assistant.styled_panels',fromlist=['popup_registry_snapshot']).popup_registry_snapshot(),
-            'unified_issue_navigation': __import__('issmaker_modeling_assistant.unified_issue_navigator', fromlist=['snapshot']).snapshot(),
+            'styled_popup_lifecycle': __import__((addon_key() + '.styled_panels'),fromlist=['popup_registry_snapshot']).popup_registry_snapshot(),
+            'unified_issue_navigation': __import__((addon_key() + '.unified_issue_navigator'), fromlist=['snapshot']).snapshot(),
             'analysis_running': view_tools.analysis_running(),
             'quick_linked_active': modeling_tools.linked_active(),
             'weld_preview': weld_preview.state(),
@@ -111,27 +101,23 @@ def collect_snapshot(context):
             'unified_tool_hud': ui.tool_hud_diagnostics(context),
             'active_operations': sorted(runtime._ACTIVE),
             'registered_tools': [vars(spec) for spec in registry.TOOLS],
-            'brick_hole': brick_integration.status(),
-            'brick_hole_build_id': getattr(bh, 'BH0472_BUILD_ID', getattr(bh, 'BH0468_BUILD_ID', 'UNKNOWN')),
-            'reliability_foundation': __import__('issmaker_modeling_assistant.core.reliability.architecture',fromlist=['snapshot']).snapshot(),
+            'reliability_foundation': __import__((addon_key() + '.core.reliability.architecture'),fromlist=['snapshot']).snapshot(),
             'collision_inspector': collision_integration.status(),
             'uv_wall': uv_wall_integration.status(context),
             'uv_wall_performance': _uvwall_performance_snapshot(),
             'module_visualization': module_visualization.status(context),
             'uv_orientation_quality': module_visualization.uv_quality_diagnostics(context),
             'role_surface_fast': module_visualization.role_surface_diagnostics(context, mode='FAST'),
-            'dwos': dwos_integration.status(context),
             'persistent_notice': {name:getattr(context.scene,'ima_notice_'+name,'') for name in ('message','tool','kind')},
             'collision_actions': list(ci._ACTION_TRACE)[-300:],
             'tool_action_trace': action_trace.snapshot(),
             'viewport_window_visibility': window_visibility.snapshot_all(),
             'viewport_fixed_reservations': window_visibility.fixed_snapshot(),
-            'visual_kit': __import__('issmaker_modeling_assistant.core.workspace_components',
+            'visual_kit': __import__((addon_key() + '.core.workspace_components'),
                                    fromlist=['diagnostics']).diagnostics(),
-            'adaptive_workspace': __import__('issmaker_modeling_assistant.core.adaptive_workspace',
+            'adaptive_workspace': __import__((addon_key() + '.core.adaptive_workspace'),
                                             fromlist=['diagnostics']).diagnostics(),
-            'ui_layout': __import__('issmaker_modeling_assistant.core.ui_layout_scaling', fromlist=['snapshot_layout']).snapshot_layout(),
-            'brick_hole_actions': list(bh._ACTION_TRACE)[-300:],
+            'ui_layout': __import__((addon_key() + '.core.ui_layout_scaling'), fromlist=['snapshot_layout']).snapshot_layout(),
         },
         'windows': [],
     }
@@ -173,13 +159,6 @@ def collect_snapshot(context):
             'active_uv': mesh.uv_layers.active.name if mesh.uv_layers.active else None,
             'active_uv_index': mesh.uv_layers.active_index,
             'uv_layer_names': [layer.name for layer in mesh.uv_layers],
-            'dwos_uv_generation': {
-                key:mesh.get(key,None) for key in (
-                    'DWOS_uv_stage_state','DWOS_uv_stage_reason','DWOS_uv_schema',
-                    'DWOS_uv_resolution','DWOS_uv_texel_px_m',
-                    'DWOS_uv_triage_state','DWOS_uv_triage_oversized',
-                    'DWOS_uv_triage_unsafe')
-            },
         }
         if context.mode == 'EDIT_MESH':
             try:
@@ -263,8 +242,6 @@ class IMA_OT_DiagnosticsZip(Operator):
                     action_trace.snapshot(), ensure_ascii=False, indent=2))
                 archive.writestr('undo_redo_audit.json', json.dumps(
                     undo_audit.snapshot(), ensure_ascii=False, indent=2, default=str))
-                archive.writestr('brick_hole_action_trace.json', json.dumps(
-                    list(bh._ACTION_TRACE)[-300:], ensure_ascii=False, indent=2, default=str))
                 archive.writestr('collision_action_trace.json', json.dumps(
                     list(ci._ACTION_TRACE)[-300:], ensure_ascii=False, indent=2, default=str))
                 try:
@@ -273,15 +250,6 @@ class IMA_OT_DiagnosticsZip(Operator):
                                      collision_log[-MAX_LOG_BYTES:])
                 except Exception as exc:
                     archive.writestr('logs/Collision_Log_Error.txt', repr(exc))
-                try:
-                    from .tools.dwos_windows.native import dwos_log
-                    dwos_path=getattr(dwos_log,'_LOG_PATH',None)
-                    if dwos_path and os.path.isfile(str(dwos_path)):
-                        with open(dwos_path,'rb') as f:
-                            f.seek(max(0,os.path.getsize(dwos_path)-MAX_LOG_BYTES))
-                            archive.writestr('logs/DWOS_Window_Core.log',f.read())
-                except Exception as exc:
-                    archive.writestr('logs/DWOS_Log_Error.txt',repr(exc))
                 # UV Wall owns a separate session logger; include only its
                 # actual named session/latest/failure paths, never scan disks.
                 for label, path in _uv_wall_log_paths():
@@ -298,26 +266,6 @@ class IMA_OT_DiagnosticsZip(Operator):
                                         json.dumps(cadence,ensure_ascii=False,indent=2))
                     except (OSError, ValueError) as exc:
                         archive.writestr('logs/UV_Wall_'+label+'_ERROR.txt', repr(exc))
-                source_text = bpy.data.texts.get(getattr(bh, 'LOG_TEXT_NAME', ''))
-                if source_text is not None:
-                    archive.writestr('logs/Brick_Hole_Text.log',
-                        source_text.as_string()[-MAX_LOG_BYTES:])
-                # BH0468: the exact five-loop geometry/UV witness was previously
-                # stored only in the separate Brick Hole diagnostics ZIP. The
-                # one-click ISSMAKER support ZIP must include it as well.
-                try:
-                    witnesses=list(bh._TESSELLATION_WITNESSES)
-                    archive.writestr('brick_hole_tessellation_witnesses.json',
-                        json.dumps(witnesses,ensure_ascii=False,indent=2))
-                    archive.writestr('brick_hole_tessellation_evidence_status.json',
-                        json.dumps({'schema':1,'count':len(witnesses),
-                                    'max_kept':12,'source':'Brick Hole session',
-                                    'relevant_to_latest_operation':'UNVERIFIED',
-                                    'note':'Coordinates only, no .blend file included'},
-                                   ensure_ascii=False,indent=2))
-                except Exception as exc:
-                    archive.writestr('brick_hole_tessellation_evidence_ERROR.txt',
-                        f'{type(exc).__name__}: {exc}'[:500])
                 # RF1: one support ZIP carries the common architecture contract and
                 # a bounded cross-tool read-only Reliability Lab result.
                 try:
@@ -377,13 +325,9 @@ def nested_support_groups():
                                  'reliability_decision_ledger.json','reliability_lab_ERROR.txt',
                                  'unified_issue_navigator.json',
                                  'hud_acceptance_lab.json', 'hud_acceptance_lab_ERROR.txt'),
-        '02_Brick_Hole.zip': ('brick_hole_action_trace.json','logs/Brick_Hole_Text.log',
-                              'brick_hole_tessellation_witnesses.json',
-                              'brick_hole_tessellation_evidence_status.json'),
-        '03_Collision_Inspector.zip': ('collision_action_trace.json','logs/Collision_Inspector.log'),
-        '04_UV_Wall.zip': ('logs/UV_Wall_',),
-        '05_DWOS_Windows.zip': ('logs/DWOS_Window_Core.log',),
-        '06_Undo_Redo.zip': ('undo_redo_audit.json',),
+        '02_Collision_Inspector.zip': ('collision_action_trace.json','logs/Collision_Inspector.log'),
+        '03_UV_Wall.zip': ('logs/UV_Wall_',),
+        '04_Undo_Redo.zip': ('undo_redo_audit.json',),
     }
 
 
@@ -401,9 +345,8 @@ def pack_nested_support_archives(outer_path, snapshot=None):
                 if any(name==pattern or (pattern.endswith('_') and name.startswith(pattern)) for pattern in patterns):
                     inner.writestr(name,data)
                     entries.append(name)
-            if snapshot is not None and archive_name.startswith(('02_','03_','04_','05_')):
-                key={'02_':'brick_hole','03_':'collision_inspector',
-                     '04_':'uv_wall','05_':'dwos'}[archive_name[:3]]
+            if snapshot is not None and archive_name.startswith(('02_','03_')):
+                key={'02_':'collision_inspector','03_':'uv_wall'}[archive_name[:3]]
                 inner.writestr('module_status.json',json.dumps(
                     snapshot.get('addon_state',{}).get(key,{}),ensure_ascii=False,indent=2,default=str))
                 entries.append('module_status.json')
@@ -520,20 +463,12 @@ def collect_full_support_text(context):
     section('ISSMAKER MODELING', lambda: _read_log_tail(log.path()))
     section('ISSMAKER TOOL ACTION TRACE', lambda: json.dumps(
         action_trace.snapshot(), ensure_ascii=False, indent=2, default=str))
-    section('BRICK HOLE', lambda: (bpy.data.texts.get(bh.LOG_TEXT_NAME).as_string()
-        if bpy.data.texts.get(bh.LOG_TEXT_NAME) is not None else
-        json.dumps(list(bh._ACTION_TRACE)[-300:], ensure_ascii=False, default=str)))
-    section('BRICK HOLE ACTION TRACE', lambda: json.dumps(list(bh._ACTION_TRACE)[-300:], ensure_ascii=False, indent=2, default=str))
     section('COLLISION INSPECTOR', lambda: ci._make_log(context))
     section('COLLISION ACTION TRACE', lambda: json.dumps(list(ci._ACTION_TRACE)[-300:], ensure_ascii=False, indent=2, default=str))
     for label,path in _uv_wall_log_paths():
         section('UV WALL '+label, lambda path=path: _read_log_tail(path))
     if not _uv_wall_log_paths():
         sections.append('\n\n===== UV WALL =====\n[Файлы логов не обнаружены]')
-    def _dwos_log():
-        from .tools.dwos_windows.native import dwos_log
-        return _read_log_tail(str(getattr(dwos_log, '_LOG_PATH', '') or ''))
-    section('DWOS WINDOWS', _dwos_log)
     return (
         'ISSMAKER 1.8.4 — ДИАГНОСТИКА ДЛЯ ТЕХЛИДА\n'
         'ВНИМАНИЕ: могут присутствовать пути к .blend, имена объектов, настройки, '
@@ -559,18 +494,11 @@ def collect_telegram_digest(context, archive_path):
     ]
     sources={
         'ISSMAKER': _read_log_tail(log.path(),max_bytes=50_000),
-        'BRICK HOLE': (bpy.data.texts.get(bh.LOG_TEXT_NAME).as_string()[-50_000:]
-                       if bpy.data.texts.get(bh.LOG_TEXT_NAME) else ''),
         'COLLISION': str(ci._make_log(context))[-50_000:],
     }
     for name,path in _uv_wall_log_paths():
         if name.startswith('latest') or name.startswith('last_failure'):
             sources['UV WALL '+name]=_read_log_tail(path,max_bytes=45_000)
-    try:
-        from .tools.dwos_windows.native import dwos_log
-        sources['DWOS']=_read_log_tail(str(getattr(dwos_log,'_LOG_PATH','') or ''),max_bytes=50_000)
-    except (ImportError,AttributeError,RuntimeError,OSError):
-        sources['DWOS']='[Лог недоступен]'
     needles=('ERROR','FAIL','BLOCK','CANCEL','EXCEPTION','ROLLBACK',
              'TRACEBACK','SEAM','GAP','WINDING','ВЫРОЖД','ОШИБ')
     remaining=3650-sum(len(line)+1 for line in title)
@@ -591,7 +519,7 @@ def collect_telegram_digest(context, archive_path):
 class IMA_OT_ReliabilityLab(Operator):
     bl_idname='ima.reliability_lab'
     bl_label='RELIABILITY LAB'
-    bl_description='Read-only: единый математический тест Brick Hole, Collision, DWOS и UV Wall'
+    bl_description='Read-only: математические тесты Collision и UV Wall'
     bl_options={'REGISTER','INTERNAL'}
 
     def execute(self, context):

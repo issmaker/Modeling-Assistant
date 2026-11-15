@@ -1,4 +1,5 @@
 """Two-choice Shader Editor radial UI; render-only, no material/node mutations."""
+from .extension_compat import addon_key
 import math
 import time
 from .core import viewport_skin as _hud_skin
@@ -40,7 +41,7 @@ def render(center, scale, opened, hover):
     import bpy
     from gpu_extras.batch import batch_for_shader
     # Style-only: Shader Editor uses the same live appearance profile as Viewport.
-    addon = bpy.context.preferences.addons.get('issmaker_modeling_assistant')
+    addon = bpy.context.preferences.addons.get(addon_key())
     theme = _theme_engine.from_preferences(addon.preferences if addon else None)
     hud = _hud_skin.shell(theme)
     ink = _hud_skin.ink(theme)

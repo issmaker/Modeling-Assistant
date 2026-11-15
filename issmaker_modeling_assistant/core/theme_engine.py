@@ -106,11 +106,15 @@ def from_values(values):
     if values.get('ui_custom_accent',False):
         accent=_rgb(values.get('ui_accent_color',accent),accent)
     secondary=_rgb(values.get('ui_secondary_color',(.26,.48,.50)),(.26,.48,.50))
-    panel=mix(base,(.025,.031,.034),.26)
-    panel=tuple(min(1.,v*material) for v in panel)
-    border=mix(panel,accent,.19)
-    header=mix(panel,secondary,.14)
-    subtitle=mix((.46,.54,.55),accent,.26)
+    # STYLE wave6: visible architectural body on dark 3D Viewports.
+    # Surface brightness belongs to ThemeSnapshot, not arbitrary per-panel
+    # literal colours. The accents still derive only from user preferences.
+    panel=mix(base,(.148,.166,.181),.62)
+    panel=tuple(min(.32,max(.065,v*material)) for v in panel)
+    border=tuple(min(1.,max(panel[i]+.080,
+                             mix(panel,accent,.48)[i])) for i in range(3))
+    header=tuple(min(.40,panel[i]*.88+.036+secondary[i]*.045) for i in range(3))
+    subtitle=mix((.75,.81,.84),accent,.12)
     motion=str(values.get('ui_motion_quality','BALANCED')).upper()
     if motion not in {'OFF','BALANCED','RICH'}:motion='BALANCED'
     if bool(values.get('ui_reduced_motion',False)):motion='OFF'

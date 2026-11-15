@@ -2,6 +2,7 @@
 
 Passive draw only: independent Blender Gizmos retain operator dispatch.
 """
+from .extension_compat import addon_key
 import time
 from . import tool_hud_draw
 from .core.design_tokens import MINT, RED, TEXT, MUTED
@@ -15,7 +16,7 @@ def draw_complete_hud(layout_data,kind,index,count,*,highlighted_slot=-1, symbol
     try:
         import bpy
         from .core import theme_engine
-        addon=bpy.context.preferences.addons.get('issmaker_modeling_assistant')
+        addon=bpy.context.preferences.addons.get(addon_key())
         shared_theme=theme_engine.from_preferences(addon.preferences if addon else None)
     except (RuntimeError,ReferenceError,AttributeError,ImportError,TypeError):
         shared_theme=None

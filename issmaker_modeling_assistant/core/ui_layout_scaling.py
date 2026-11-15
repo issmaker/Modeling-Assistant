@@ -149,7 +149,7 @@ def intersection(a,b):
 def inspect_layout(container, controls, *, intentional=(), tolerance=1., margin=0.):
     """Pure QA for *peer* controls; caller excludes nested/child hit targets.
 
-    Rectangles are xyxy, unlike DWOS's x/y/w/h. Intentional overlap pairs
+    Rectangles are xyxy, unlike shared tool's x/y/w/h. Intentional overlap pairs
     (e.g. parent row plus favorite star) must be explicitly enumerated.
     """
     try: outer=as_xyxy(container)
